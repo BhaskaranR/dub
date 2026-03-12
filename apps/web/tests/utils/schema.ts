@@ -1,14 +1,15 @@
 import { LinkSchema as LinkSchemaOld } from "@/lib/zod/schemas/links";
 import { Link, Project, Tag } from "@dub/prisma/client";
 import { expect } from "vitest";
-import { z } from "zod";
+import * as z from "zod/v4";
 
 export const LinkSchema = LinkSchemaOld.extend({
   identifier: z.null(),
   linkRetentionCleanupDisabledAt: z.null(),
 });
 
-export const expectedLink: Partial<Link> & {
+export const expectedLink: Omit<Partial<Link>, "saleAmount"> & {
+  saleAmount: number; // API coerces BigInt → number in response
   identifier: null;
   tagId: string | null;
   tags: [];

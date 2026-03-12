@@ -10,12 +10,9 @@ import { geolocation, ipAddress, waitUntil } from "@vercel/functions";
 import { userAgent } from "next/server";
 import { recordClickCache } from "../api/links/record-click-cache";
 import { ExpandedLink, transformLink } from "../api/links/utils/transform-link";
-import {
-  detectBot,
-  detectQr,
-  getFinalUrlForRecordClick,
-  getIdentityHash,
-} from "../middleware/utils";
+import { detectBot } from "../middleware/utils/detect-bot";
+import { detectQr } from "../middleware/utils/detect-qr";
+import { getIdentityHash } from "../middleware/utils/get-identity-hash";
 import { conn } from "../planetscale";
 import { WorkspaceProps } from "../types";
 import { redis } from "../upstash";
@@ -96,13 +93,19 @@ export async function recordClick({
   // by default, we deduplicate clicks for a domain + key pair from the same IP address – only record 1 click per hour
   // we only need to do these if skipRatelimit is not true (we skip it in /api/track/:path endpoints)
   if (!skipRatelimit) {
-    // here, we check if the clickId is cached in Redis within the last hour
-    const cachedClickId = await recordClickCache.get({
-      domain,
-      key,
-      identityHash,
-    });
-    if (cachedClickId) {
+    try {
+      // here, we check if the clickId is cached in Redis within the last hour
+      const cachedClickId = await recordClickCache.get({
+        domain,
+        key,
+        identityHash,
+      });
+      if (cachedClickId) {
+        return null;
+      }
+    } catch (error) {
+      console.error(`[recordClickCache error]: ${error}`);
+      // if redis fails, return null so we don't overwhelm TB/MySQL
       return null;
     }
   }
@@ -131,8 +134,6 @@ export async function recordClick({
 
   const referer = referrer || req.headers.get("referer");
 
-  const finalUrl = url ? getFinalUrlForRecordClick({ req, url }) : "";
-
   const clickData = {
     timestamp: timestamp || new Date(Date.now()).toISOString(),
     identity_hash: identityHash,
@@ -141,7 +142,7 @@ export async function recordClick({
     link_id: linkId,
     domain,
     key,
-    url: finalUrl,
+    url: url || "",
     ip:
       // only record IP if it's a valid IP and not from a EU country
       typeof ip === "string" && ip.trim().length > 0 && !isEuCountry ? ip : "",
@@ -171,11 +172,9 @@ export async function recordClick({
   };
 
   if (shouldCacheClickId) {
-    // cache the click ID and its corresponding click data in Redis for 1 day
+    // cache the click ID and its corresponding click data in Redis for 5 minutes
     // we're doing this because ingested click events are not available immediately in Tinybird
-    await redis.set(`clickIdCache:${clickId}`, clickData, {
-      ex: 60 * 60 * 24, // cache for 1 day
-    });
+    await redis.set(`clickIdCache:${clickId}`, clickData, { ex: 60 * 5 });
   }
 
   waitUntil(

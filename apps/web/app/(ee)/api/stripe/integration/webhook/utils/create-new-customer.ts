@@ -3,13 +3,12 @@ import { includeTags } from "@/lib/api/links/include-tags";
 import { syncPartnerLinksStats } from "@/lib/api/partners/sync-partner-links-stats";
 import { executeWorkflows } from "@/lib/api/workflows/execute-workflows";
 import { generateRandomName } from "@/lib/names";
-import { createPartnerCommission } from "@/lib/partners/create-partner-commission";
+import { sendPartnerPostback } from "@/lib/postback/api/send-partner-postback";
 import { getClickEvent, recordLead } from "@/lib/tinybird";
-import { WebhookPartner } from "@/lib/types";
+import { redis } from "@/lib/upstash";
 import { sendWorkspaceWebhook } from "@/lib/webhook/publish";
 import { transformLeadEventData } from "@/lib/webhook/transform";
 import { prisma } from "@dub/prisma";
-import { WorkflowTrigger } from "@dub/prisma/client";
 import { nanoid } from "@dub/utils";
 import { waitUntil } from "@vercel/functions";
 import type Stripe from "stripe";
@@ -17,7 +16,9 @@ import type Stripe from "stripe";
 export async function createNewCustomer(event: Stripe.Event) {
   const stripeCustomer = event.data.object as Stripe.Customer;
   const stripeAccountId = event.account as string;
-  const dubCustomerExternalId = stripeCustomer.metadata?.dubCustomerId;
+  const dubCustomerExternalId =
+    stripeCustomer.metadata?.dubCustomerExternalId ||
+    stripeCustomer.metadata?.dubCustomerId;
   const clickId = stripeCustomer.metadata?.dubClickId;
 
   // The client app should always send dubClickId (dub_id) via metadata
@@ -53,6 +54,8 @@ export async function createNewCustomer(event: Stripe.Event) {
       projectConnectId: stripeAccountId,
       externalId: dubCustomerExternalId,
       projectId: link.projectId,
+      programId: link.programId,
+      partnerId: link.partnerId,
       linkId,
       clickId,
       clickedAt: new Date(clickData.timestamp + "Z"),
@@ -70,9 +73,14 @@ export async function createNewCustomer(event: Stripe.Event) {
     customer_id: customer.id,
   };
 
-  const [_lead, linkUpdated, workspace] = await Promise.all([
-    // Record lead
+  const [_lead, _leadCached, linkUpdated, workspace] = await Promise.all([
+    // record lead event in Tinybird
     recordLead(leadData),
+
+    // cache lead event in Redis because the ingested event is not available immediately on Tinybird
+    redis.set(`leadCache:${customer.id}`, leadData, {
+      ex: 60 * 5,
+    }),
 
     // update link leads count + lastLeadAt date
     prisma.link.update({
@@ -101,25 +109,34 @@ export async function createNewCustomer(event: Stripe.Event) {
     }),
   ]);
 
-  let webhookPartner: WebhookPartner | undefined;
   if (link.programId && link.partnerId) {
-    const createdCommission = await createPartnerCommission({
-      event: "lead",
-      programId: link.programId,
-      partnerId: link.partnerId,
-      linkId: link.id,
-      eventId: leadData.event_id,
-      customerId: customer.id,
-      quantity: 1,
-      context: {
-        customer: {
-          country: customer.country,
-        },
-      },
-    });
-    webhookPartner = createdCommission?.webhookPartner;
+    waitUntil(
+      Promise.allSettled([
+        executeWorkflows({
+          trigger: "partnerMetricsUpdated",
+          reason: "lead",
+          identity: {
+            workspaceId: workspace.id,
+            programId: link.programId,
+            partnerId: link.partnerId,
+          },
+          metrics: {
+            current: {
+              leads: 1,
+            },
+          },
+        }),
+
+        syncPartnerLinksStats({
+          partnerId: link.partnerId,
+          programId: link.programId,
+          eventType: "lead",
+        }),
+      ]),
+    );
   }
 
+  // send workspace webhook
   waitUntil(
     Promise.allSettled([
       sendWorkspaceWebhook({
@@ -130,27 +147,21 @@ export async function createNewCustomer(event: Stripe.Event) {
           eventName,
           link: linkUpdated,
           customer,
-          partner: webhookPartner,
           metadata: null,
         }),
       }),
 
-      ...(link.programId && link.partnerId
+      ...(link.partnerId
         ? [
-            executeWorkflows({
-              trigger: WorkflowTrigger.leadRecorded,
-              context: {
-                programId: link.programId,
-                partnerId: link.partnerId,
-                current: {
-                  leads: 1,
-                },
-              },
-            }),
-            syncPartnerLinksStats({
+            sendPartnerPostback({
               partnerId: link.partnerId,
-              programId: link.programId,
-              eventType: "lead",
+              event: "lead.created",
+              data: {
+                ...clickData,
+                eventName,
+                link: linkUpdated,
+                customer,
+              },
             }),
           ]
         : []),

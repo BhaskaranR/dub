@@ -95,7 +95,7 @@ async function main() {
         //       },
         //     });
         //     console.log(
-        //       `Cancelled ${res.count} commissions for partner ${enrollment.partnerId}`,
+        //       `Canceled ${res.count} commissions for partner ${enrollment.partnerId}`,
         //     );
         //   }
         // }
@@ -115,7 +115,6 @@ async function main() {
               status: "banned",
               bannedAt: new Date(),
               bannedReason,
-              groupId: null,
               clickRewardId: null,
               leadRewardId: null,
               saleRewardId: null,

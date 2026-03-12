@@ -1,9 +1,11 @@
 "use client";
 
-import usePartnerProgramBounties from "@/lib/swr/use-partner-program-bounties";
+import usePartnerProfile from "@/lib/swr/use-partner-profile";
+import { usePartnerProgramBounties } from "@/lib/swr/use-partner-program-bounties";
 import useProgramEnrollment from "@/lib/swr/use-program-enrollment";
 import useProgramEnrollmentsCount from "@/lib/swr/use-program-enrollments-count";
 import { useProgramMessagesCount } from "@/lib/swr/use-program-messages-count";
+import { ProgramsPromoCard } from "@/ui/partners/program-marketplace/programs-promo-card";
 import { useRouterStuff } from "@dub/ui";
 import {
   Bell,
@@ -15,16 +17,19 @@ import {
   MoneyBills2,
   Msgs,
   ShieldCheck,
+  Shop,
   SquareUserSparkle2,
   Trophy,
   UserCheck,
   Users2,
+  Webhook,
 } from "@dub/ui/icons";
 import { useParams, usePathname } from "next/navigation";
 import { ReactNode, useMemo } from "react";
 import { CursorRays } from "./icons/cursor-rays";
 import { Hyperlink } from "./icons/hyperlink";
 import { LinesY } from "./icons/lines-y";
+import { User } from "./icons/user";
 import { PartnerProgramDropdown } from "./partner-program-dropdown";
 import { PayoutStats } from "./payout-stats";
 import { ProgramHelpSupport } from "./program-help-support";
@@ -39,6 +44,7 @@ type SidebarNavData = {
   unreadMessagesCount?: number;
   programBountiesCount?: number;
   showDetailedAnalytics?: boolean;
+  postbacksEnabled?: boolean;
 };
 
 const NAV_GROUPS: SidebarNavGroups<SidebarNavData> = ({
@@ -98,7 +104,15 @@ const NAV_AREAS: SidebarNavAreas<SidebarNavData> = {
             href: "/programs",
             isActive: (pathname, href) =>
               pathname.startsWith(href) &&
-              !pathname.startsWith(`${href}/invitations`),
+              ["invitations", "marketplace"].every(
+                (k) => !pathname.startsWith(`${href}/${k}`),
+              ),
+          },
+          {
+            name: "Marketplace",
+            icon: Shop,
+            href: "/programs/marketplace" as `/${string}`,
+            badge: "New",
           },
           {
             name: "Invitations",
@@ -111,7 +125,7 @@ const NAV_AREAS: SidebarNavAreas<SidebarNavData> = {
     ],
   }),
 
-  profile: () => ({
+  profile: ({ postbacksEnabled }) => ({
     title: "Partner profile",
     direction: "left",
     content: [
@@ -130,6 +144,20 @@ const NAV_AREAS: SidebarNavAreas<SidebarNavData> = {
           },
         ],
       },
+      ...(postbacksEnabled
+        ? [
+            {
+              name: "Developer",
+              items: [
+                {
+                  name: "Postbacks",
+                  icon: Webhook,
+                  href: "/profile/postbacks" as `/${string}`,
+                },
+              ],
+            },
+          ]
+        : []),
       {
         name: "Account",
         items: [
@@ -202,6 +230,12 @@ const NAV_AREAS: SidebarNavAreas<SidebarNavData> = {
                   href: `/programs/${programSlug}/events` as `/${string}`,
                   locked: isUnapproved,
                 },
+                {
+                  name: "Customers",
+                  icon: User,
+                  href: `/programs/${programSlug}/customers` as `/${string}`,
+                  locked: isUnapproved,
+                },
               ]
             : []),
         ],
@@ -270,7 +304,7 @@ export function PartnersSidebarNav({
 
   const isEnrolledProgramPage =
     pathname.startsWith(`/programs/${programSlug}`) &&
-    pathname !== `/programs/${programSlug}/apply`;
+    !["/apply", "/invite"].some((p) => pathname.endsWith(p));
 
   const { programEnrollment, showDetailedAnalytics } = useProgramEnrollment({
     enabled: isEnrolledProgramPage,
@@ -292,8 +326,20 @@ export function PartnersSidebarNav({
     status: "invited",
   });
 
+  const isUnapproved = useMemo(
+    () =>
+      !!programEnrollment &&
+      !["approved", "deactivated", "archived"].includes(
+        programEnrollment.status,
+      ),
+    [programEnrollment],
+  );
+
   const { bountiesCount } = usePartnerProgramBounties({
-    enabled: isEnrolledProgramPage,
+    enabled:
+      isEnrolledProgramPage && programEnrollment && !isUnapproved
+        ? true
+        : false,
   });
 
   const { count: unreadMessagesCount } = useProgramMessagesCount({
@@ -302,6 +348,8 @@ export function PartnersSidebarNav({
       unread: true,
     },
   });
+
+  const { partner } = usePartnerProfile();
 
   return (
     <SidebarNav
@@ -312,19 +360,25 @@ export function PartnersSidebarNav({
         pathname,
         queryString: getQueryString(),
         programSlug: programSlug || "",
-        isUnapproved:
-          !!programEnrollment &&
-          !["approved", "deactivated", "archived"].includes(
-            programEnrollment.status,
-          ),
+        isUnapproved,
         invitationsCount,
         unreadMessagesCount,
         programBountiesCount: bountiesCount.active,
         showDetailedAnalytics,
+        postbacksEnabled: partner?.featureFlags?.postbacks,
       }}
       toolContent={toolContent}
       newsContent={newsContent}
-      bottom={isEnrolledProgramPage ? <ProgramHelpSupport /> : <PayoutStats />}
+      bottom={
+        isEnrolledProgramPage ? (
+          <ProgramHelpSupport />
+        ) : (
+          <>
+            <ProgramsPromoCard />
+            <PayoutStats />
+          </>
+        )
+      }
     />
   );
 }

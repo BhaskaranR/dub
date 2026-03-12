@@ -1,5 +1,7 @@
+import { constructPartnerLink } from "@/lib/partners/construct-partner-link";
 import { PartnerGroupProps } from "@/lib/types";
 import { AnimatedEmptyState } from "@/ui/shared/animated-empty-state";
+import { Program } from "@dub/prisma/client";
 import {
   Button,
   CopyButton,
@@ -8,14 +10,14 @@ import {
   Users,
   useTable,
 } from "@dub/ui";
-import { Pen2, Plus2 } from "@dub/ui/icons";
+import { ArrowTurnRight2, Pen2, Plus2 } from "@dub/ui/icons";
 import {
   currencyFormatter,
   fetcher,
+  getApexDomain,
   getPrettyUrl,
   nFormatter,
 } from "@dub/utils";
-import { Program } from "@prisma/client";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 import useSWR from "swr";
@@ -25,7 +27,10 @@ import { ReferralsEmbedLink } from "./types";
 interface Props {
   program: Pick<Program, "name">;
   links: ReferralsEmbedLink[];
-  group: Pick<PartnerGroupProps, "id" | "additionalLinks" | "maxPartnerLinks">;
+  group: Pick<
+    PartnerGroupProps,
+    "id" | "additionalLinks" | "maxPartnerLinks" | "linkStructure"
+  >;
   onCreateLink: () => void;
   onEditLink: (link: ReferralsEmbedLink) => void;
 }
@@ -71,12 +76,42 @@ export function ReferralsEmbedLinksList({
         header: "Link",
         minSize: 200,
         cell: ({ row }) => {
+          const partnerLink = constructPartnerLink({
+            group,
+            link: row.original,
+          });
+
+          const destinationUrl = row.original.url;
+
           return (
-            <div className="flex items-center gap-2">
-              <CopyButton value={row.original.shortLink} />
-              <span className="text-sm">
-                {getPrettyUrl(row.original.shortLink)}
-              </span>
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="border-border-subtle has-[:hover]:bg-bg-muted rounded-md border bg-white transition-colors dark:bg-black">
+                <CopyButton
+                  value={partnerLink}
+                  variant="neutral"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md p-0 hover:bg-transparent active:bg-transparent"
+                />
+              </div>
+
+              <div className="flex min-w-0 flex-col">
+                <span
+                  className="text-content-emphasis min-w-0 truncate text-xs font-medium"
+                  title={partnerLink}
+                >
+                  {getPrettyUrl(partnerLink)}
+                </span>
+                <div className="flex min-w-0 max-w-[300px] items-center gap-1">
+                  <ArrowTurnRight2 className="text-content-muted size-3 shrink-0" />
+                  <a
+                    className="text-content-subtle min-w-0 cursor-alias truncate text-xs font-normal decoration-dotted underline-offset-2 hover:underline"
+                    href={destinationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {destinationUrl ? getApexDomain(destinationUrl) : ""}
+                  </a>
+                </div>
+              </div>
             </div>
           );
         },

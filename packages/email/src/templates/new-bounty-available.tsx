@@ -18,6 +18,7 @@ import { Footer } from "../components/footer";
 
 export default function NewBountyAvailable({
   bounty = {
+    id: "bty_xxx",
     name: "Promote Acme at your campus and earn $500",
     type: "performance",
     endsAt: new Date(),
@@ -31,6 +32,7 @@ export default function NewBountyAvailable({
   email = "panic@thedis.co",
 }: {
   bounty: {
+    id: string;
     name: string;
     type: "performance" | "submission";
     endsAt: Date | null;
@@ -74,23 +76,23 @@ export default function NewBountyAvailable({
               </Section>
 
               {bounty.description && (
-                <Section className="flex border-t border-solid border-neutral-200 p-6">
+                <Section className="border-t border-solid border-neutral-200 p-6">
                   <Text className="m-0 p-0 text-sm font-semibold text-neutral-900">
                     Details
                   </Text>
-                  <Text className="m-0 mt-2 p-0 text-sm font-medium text-neutral-500">
+                  <Section className="p-0 text-sm font-medium text-neutral-500">
                     <Markdown
                       markdownCustomStyles={{ link: { color: "black" } }}
                     >
                       {bounty.description}
                     </Markdown>
-                  </Text>
+                  </Section>
                 </Section>
               )}
 
               <Section className="px-6 pb-6 text-center">
                 <Link
-                  href={`https://partners.dub.co/programs/${program.slug}/bounties`}
+                  href={`https://partners.dub.co/programs/${program.slug}/bounties/${bounty.id}`}
                   className="box-border block w-full rounded-md bg-black px-2 py-4 text-center text-sm font-medium leading-none text-white no-underline"
                 >
                   View bounty

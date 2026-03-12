@@ -1,30 +1,34 @@
 "use client";
 
-import { acceptProgramInviteAction } from "@/lib/actions/partners/accept-program-invite";
-import { mutatePrefix } from "@/lib/swr/mutate";
 import useProgramEnrollment from "@/lib/swr/use-program-enrollment";
-import { DiscountProps, ProgramProps, RewardProps } from "@/lib/types";
+import {
+  DiscountProps,
+  GroupBountySummaryProps,
+  ProgramProps,
+  RewardProps,
+} from "@/lib/types";
+import { LanderRewards } from "@/ui/partners/lander/lander-rewards";
 import { PartnerStatusBadges } from "@/ui/partners/partner-status-badges";
 import { useProgramApplicationSheet } from "@/ui/partners/program-application-sheet";
-import { ProgramRewardList } from "@/ui/partners/program-reward-list";
 import { BlurImage, Button, CircleCheck, Link4, StatusBadge } from "@dub/ui";
 import { capitalize, cn, OG_AVATAR_URL } from "@dub/utils";
-import { useAction } from "next-safe-action/hooks";
-import { useRouter } from "next/navigation";
+import { redirect } from "next/navigation";
 import { useMemo, useState } from "react";
-import { toast } from "sonner";
 
 export function ProgramSidebar({
   program,
   applicationRewards,
   applicationDiscount,
 }: {
-  program: ProgramProps;
+  program: Omit<ProgramProps, "referralFormData"> & {
+    group?: {
+      id: string;
+      bounties?: GroupBountySummaryProps[];
+    } | null;
+  };
   applicationRewards: RewardProps[];
   applicationDiscount: DiscountProps | null;
 }) {
-  const router = useRouter();
-
   const { programEnrollment } = useProgramEnrollment({
     swrOpts: {
       keepPreviousData: true,
@@ -47,14 +51,11 @@ export function ProgramSidebar({
 
   const buttonText = useMemo(() => {
     if (justApplied) return "Applied";
-
     if (!programEnrollment) return "Apply";
 
     switch (programEnrollment.status) {
       case "pending":
         return "Applied";
-      case "invited":
-        return "Accept invite";
       case "approved":
         return "Enrolled";
       default:
@@ -62,26 +63,16 @@ export function ProgramSidebar({
     }
   }, [justApplied, programEnrollment]);
 
-  const { executeAsync: executeAcceptInvite, isPending: isAcceptingInvite } =
-    useAction(acceptProgramInviteAction, {
-      onSuccess: async () => {
-        await mutatePrefix("/api/partner-profile/programs");
-        toast.success("Program invite accepted!");
-        if (program) {
-          router.push(`/programs/${program.slug}`);
-        }
-      },
-      onError: ({ error }) => {
-        toast.error(error.serverError);
-      },
-    });
-
   const { programApplicationSheet, setIsOpen: setIsApplicationSheetOpen } =
     useProgramApplicationSheet({
       program,
       programEnrollment,
       onSuccess: () => setJustApplied(true),
     });
+
+  if (programEnrollment?.status === "invited") {
+    redirect(`/programs/${program.slug}/invite`);
+  }
 
   return (
     <div>
@@ -113,11 +104,7 @@ export function ProgramSidebar({
       </div>
 
       <div className="mt-8">
-        <h2 className="mb-2 text-base font-semibold text-neutral-800">
-          Rewards
-        </h2>
-
-        <ProgramRewardList
+        <LanderRewards
           rewards={
             (programEnrollment?.status === "approved"
               ? programEnrollment.rewards
@@ -127,11 +114,17 @@ export function ProgramSidebar({
             []
           }
           discount={
-            programEnrollment?.discount ?? applicationDiscount !== undefined
-              ? applicationDiscount
-              : program.discounts?.[0] ?? null
+            programEnrollment?.discount ??
+            applicationDiscount ??
+            program.discounts?.[0] ??
+            null
           }
-          className="bg-neutral-100"
+          bounties={
+            programEnrollment?.status === "approved" &&
+            programEnrollment.groupId !== program.group?.id
+              ? undefined
+              : program.group?.bounties
+          }
         />
       </div>
 
@@ -139,18 +132,8 @@ export function ProgramSidebar({
         className={cn("mt-8", justApplied && "text-green-600")}
         text={buttonText}
         icon={justApplied ? <CircleCheck className="size-4" /> : undefined}
-        disabled={
-          (programEnrollment && programEnrollment.status !== "invited") ||
-          justApplied
-        }
-        onClick={() => {
-          if (programEnrollment?.status === "invited") {
-            executeAcceptInvite({
-              programId: programEnrollment.programId,
-            });
-          } else setIsApplicationSheetOpen(true);
-        }}
-        loading={isAcceptingInvite}
+        disabled={programEnrollment || justApplied ? true : undefined}
+        onClick={() => setIsApplicationSheetOpen(true)}
       />
     </div>
   );

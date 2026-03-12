@@ -1,6 +1,6 @@
 import { prisma } from "@dub/prisma";
+import { Customer, Program, Project } from "@dub/prisma/client";
 import { nanoid } from "@dub/utils";
-import { Program, Project } from "@prisma/client";
 import { createId } from "../api/create-id";
 import { updateLinkStatsForImporter } from "../api/links/update-link-stats-for-importer";
 import { syncPartnerLinksStats } from "../api/partners/sync-partner-links-stats";
@@ -42,7 +42,26 @@ export async function importCustomers(payload: RewardfulImportPayload) {
       break;
     }
 
-    await Promise.all(
+    const stripeCustomerIds = referrals
+      .filter(
+        (r) => r.stripe_customer_id && r.stripe_customer_id.startsWith("cus_"),
+      )
+      .map((r) => r.stripe_customer_id!);
+    const externalIds = referrals.map((r) => r.customer.id);
+
+    const existingCustomers = await prisma.customer.findMany({
+      where: {
+        OR: [
+          { stripeCustomerId: { in: stripeCustomerIds } },
+          {
+            projectId: workspace.id,
+            externalId: { in: externalIds },
+          },
+        ],
+      },
+    });
+
+    await Promise.allSettled(
       referrals.map((referral) =>
         createCustomer({
           referral,
@@ -50,6 +69,7 @@ export async function importCustomers(payload: RewardfulImportPayload) {
           program,
           campaignIds,
           importId,
+          existingCustomers,
         }),
       ),
     );
@@ -72,12 +92,14 @@ async function createCustomer({
   program,
   campaignIds,
   importId,
+  existingCustomers,
 }: {
   referral: RewardfulReferral;
   workspace: Project;
   program: Program;
   campaignIds: string[];
   importId: string;
+  existingCustomers: Customer[];
 }) {
   const referralId = referral.customer ? referral.customer.email : referral.id;
   if (
@@ -116,12 +138,12 @@ async function createCustomer({
     return;
   }
 
-  const link = await prisma.link.findUnique({
+  // here we're using findFirst because for some reason findUnique uses a weird collation
+  // that causes a bunch of LINK_NOT_FOUND errors (for links/coupons that actually exist)
+  const link = await prisma.link.findFirst({
     where: {
-      domain_key: {
-        domain: program.domain!,
-        key: shortLinkToken,
-      },
+      domain: program.domain!,
+      key: shortLinkToken,
     },
   });
 
@@ -148,11 +170,9 @@ async function createCustomer({
     return;
   }
 
-  const customerFoundStripeId = await prisma.customer.findUnique({
-    where: {
-      stripeCustomerId: referral.stripe_customer_id,
-    },
-  });
+  const customerFoundStripeId = existingCustomers.find(
+    (c) => c.stripeCustomerId === referral.stripe_customer_id,
+  );
 
   if (customerFoundStripeId) {
     console.log(
@@ -161,14 +181,9 @@ async function createCustomer({
     return;
   }
 
-  const customerFoundExternalId = await prisma.customer.findUnique({
-    where: {
-      projectId_externalId: {
-        projectId: workspace.id,
-        externalId: referral.customer.id,
-      },
-    },
-  });
+  const customerFoundExternalId = existingCustomers.find(
+    (c) => c.externalId === referral.customer.id,
+  );
 
   if (customerFoundExternalId) {
     console.log(
@@ -207,7 +222,7 @@ async function createCustomer({
 
   const customerId = createId({ prefix: "cus_" });
 
-  await prisma.customer.create({
+  const customer = await prisma.customer.create({
     data: {
       id: customerId,
       name:
@@ -220,6 +235,8 @@ async function createCustomer({
       projectConnectId: workspace.stripeConnectId,
       clickId: clickEvent.click_id,
       linkId: link.id,
+      programId: link.programId,
+      partnerId: link.partnerId,
       country: clickEvent.country,
       clickedAt: new Date(referral.created_at),
       createdAt: new Date(referral.became_lead_at),
@@ -227,6 +244,10 @@ async function createCustomer({
       stripeCustomerId: referral.stripe_customer_id,
     },
   });
+
+  console.log(
+    `Created customer ${customer.email} for referral ${link.shortLink}`,
+  );
 
   await Promise.allSettled([
     recordLeadWithTimestamp({

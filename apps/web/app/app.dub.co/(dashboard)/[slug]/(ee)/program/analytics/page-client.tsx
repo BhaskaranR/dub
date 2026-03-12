@@ -74,7 +74,9 @@ export function ProgramAnalyticsPageClient() {
     onSelect,
     onRemove,
     onRemoveAll,
+    onRemoveFilter,
     onOpenFilter,
+    onToggleOperator,
     streaming,
     activeFiltersWithStreaming,
   } = useAnalyticsFilters({
@@ -98,6 +100,7 @@ export function ProgramAnalyticsPageClient() {
             onSelect={onSelect}
             onRemove={onRemove}
             onOpenFilter={onOpenFilter}
+            isAdvancedFilter
             askAI
           />
           <SimpleDateRangePicker align="start" className="w-fit" />
@@ -128,7 +131,10 @@ export function ProgramAnalyticsPageClient() {
             activeFilters={activeFiltersWithStreaming}
             onSelect={onSelect}
             onRemove={onRemove}
+            onRemoveFilter={onRemoveFilter}
             onRemoveAll={onRemoveAll}
+            onToggleOperator={onToggleOperator}
+            isAdvancedFilter
           />
         </div>
       </div>
@@ -146,7 +152,7 @@ export function ProgramAnalyticsPageClient() {
           totalEvents,
         }}
       >
-        <div className="border-border-subtle divide-border-subtle divide-y overflow-hidden border rounded-xl sm:rounded-2xl">
+        <div className="border-border-subtle divide-border-subtle divide-y overflow-hidden rounded-xl border sm:rounded-2xl">
           <AnalyticsChart />
           <AnalyticsPartnersTable />
         </div>

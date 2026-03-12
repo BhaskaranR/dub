@@ -1,5 +1,5 @@
+import { WorkspaceRole } from "@dub/prisma/client";
 import { combineWords } from "@dub/utils";
-import { WorkspaceRole } from "@prisma/client";
 import { PermissionAction, ROLE_PERMISSIONS } from "./api/rbac/permissions";
 
 export const clientAccessCheck = ({
@@ -24,6 +24,6 @@ export const clientAccessCheck = ({
 
   return {
     allowed,
-    error: `Only workspace ${combineWords(allowedWorkspaceRoles.map((r) => `${r}s`))} can ${customPermissionDescription || permission.description}.`,
+    error: `Only workspace ${combineWords(allowedWorkspaceRoles.map((r) => `${r === "billing" ? "billing user" : r}s`))} can ${customPermissionDescription || permission.description}.`,
   };
 };

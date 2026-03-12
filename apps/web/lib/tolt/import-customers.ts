@@ -1,6 +1,6 @@
 import { prisma } from "@dub/prisma";
+import { Customer, Link, Project } from "@dub/prisma/client";
 import { nanoid } from "@dub/utils";
-import { Link, Project } from "@prisma/client";
 import { createId } from "../api/create-id";
 import { updateLinkStatsForImporter } from "../api/links/update-link-stats-for-importer";
 import { syncPartnerLinksStats } from "../api/partners/sync-partner-links-stats";
@@ -108,12 +108,24 @@ export async function importCustomers(payload: ToltImportPayload) {
       {} as Record<string, Date>,
     );
 
+    const externalIds = customers.map((c) => c.customer_id || c.email || c.id);
+
+    const existingCustomers = await prisma.customer.findMany({
+      where: {
+        projectId: workspace.id,
+        externalId: {
+          in: externalIds,
+        },
+      },
+    });
+
     await Promise.allSettled(
       customers.map(({ partner, ...customer }) =>
         createReferral({
           workspace,
           customer,
           links: partnerEmailToLinks.get(partner.email) ?? [],
+          existingCustomers,
           latestLeadAt: partnerEmailToLatestLeadAt[partner.email],
           importId,
         }),
@@ -138,6 +150,7 @@ async function createReferral({
   customer,
   workspace,
   links,
+  existingCustomers,
   latestLeadAt,
   importId,
 }: {
@@ -147,6 +160,7 @@ async function createReferral({
     Link,
     "id" | "key" | "domain" | "url" | "partnerId" | "programId" | "lastLeadAt"
   >[];
+  existingCustomers: Customer[];
   latestLeadAt: Date;
   importId: string;
 }) {
@@ -172,14 +186,9 @@ async function createReferral({
   const customerExternalId =
     customer.customer_id || customer.email || customer.id;
 
-  const customerFound = await prisma.customer.findUnique({
-    where: {
-      projectId_externalId: {
-        projectId: workspace.id,
-        externalId: customerExternalId,
-      },
-    },
-  });
+  const customerFound = existingCustomers.find(
+    (c) => c.externalId === customerExternalId,
+  );
 
   if (customerFound) {
     console.log(
@@ -234,6 +243,8 @@ async function createReferral({
         projectConnectId: workspace.stripeConnectId,
         clickId: clickEvent.click_id,
         linkId: link.id,
+        programId: link.programId,
+        partnerId: link.partnerId,
         country: clickEvent.country,
         clickedAt: new Date(customer.created_at),
         createdAt: new Date(customer.created_at),

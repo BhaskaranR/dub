@@ -6,7 +6,7 @@ import { ratelimit } from "@/lib/upstash";
 import { submissionRequirementsSchema } from "@/lib/zod/schemas/bounties";
 import { prisma } from "@dub/prisma";
 import { nanoid, R2_URL } from "@dub/utils";
-import { z } from "zod";
+import * as z from "zod/v4";
 import { authPartnerActionClient } from "../safe-action";
 
 const schema = z.object({
@@ -14,11 +14,11 @@ const schema = z.object({
   bountyId: z.string(),
 });
 
-const MAX_ATTEMPTS = 5;
+const MAX_ATTEMPTS = 25;
 const CACHE_KEY_PREFIX = "bounty:submission:file:upload";
 
 export const uploadBountySubmissionFileAction = authPartnerActionClient
-  .schema(schema)
+  .inputSchema(schema)
   .action(async ({ ctx, parsedInput }) => {
     const { partner } = ctx;
     const { programId, bountyId } = parsedInput;
@@ -65,17 +65,6 @@ export const uploadBountySubmissionFileAction = authPartnerActionClient
       throw new Error("This bounty is not for this program.");
     }
 
-    // Validate the partner has not already created a submission for this bounty
-    if (bounty.submissions.length > 0) {
-      const submission = bounty.submissions[0];
-
-      if (submission.status !== "draft") {
-        throw new Error(
-          "You have already created a submission for this bounty.",
-        );
-      }
-    }
-
     if (bounty.groups.length > 0) {
       const isInGroup = bounty.groups.find(
         ({ groupId }) => groupId === programEnrollment.groupId,
@@ -110,7 +99,7 @@ export const uploadBountySubmissionFileAction = authPartnerActionClient
       bounty.submissionRequirements,
     );
 
-    const requireImage = submissionRequirements.includes("image");
+    const requireImage = !!submissionRequirements?.image;
 
     if (!requireImage) {
       throw new Error(

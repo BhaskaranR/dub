@@ -1,8 +1,13 @@
-import { Prisma, Program } from "@dub/prisma/client";
+import { getPlanCapabilities } from "@/lib/plan-capabilities";
+import { Prisma, Program, Project } from "@dub/prisma/client";
 
-export function getPayoutEligibilityFilter(
-  program: Pick<Program, "id" | "minPayoutAmount" | "payoutMode">,
-): Prisma.PayoutWhereInput {
+export function getPayoutEligibilityFilter({
+  program,
+  workspace,
+}: {
+  program: Pick<Program, "id" | "minPayoutAmount" | "payoutMode">;
+  workspace: Pick<Project, "plan">;
+}): Prisma.PayoutWhereInput {
   const commonWhere: Prisma.PayoutWhereInput = {
     programId: program.id,
     status: "pending",
@@ -10,6 +15,16 @@ export function getPayoutEligibilityFilter(
     amount: {
       gte: program.minPayoutAmount,
     },
+    // Filter out payouts from partners with pending fraud events (for eligible workspaces)
+    ...(getPlanCapabilities(workspace.plan).canManageFraudEvents && {
+      programEnrollment: {
+        fraudEventGroups: {
+          every: {
+            status: "resolved",
+          },
+        },
+      },
+    }),
   };
 
   switch (program.payoutMode) {
@@ -28,14 +43,9 @@ export function getPayoutEligibilityFilter(
     case "external":
       return {
         ...commonWhere,
-        partner: {
-          programs: {
-            some: {
-              programId: program.id,
-              tenantId: {
-                not: null,
-              },
-            },
+        programEnrollment: {
+          tenantId: {
+            not: null,
           },
         },
       };
@@ -44,26 +54,22 @@ export function getPayoutEligibilityFilter(
     case "hybrid":
       return {
         ...commonWhere,
-        partner: {
-          OR: [
-            {
+        OR: [
+          {
+            partner: {
               payoutsEnabledAt: {
                 not: null,
               },
             },
-            {
-              payoutsEnabledAt: null,
-              programs: {
-                some: {
-                  programId: program.id,
-                  tenantId: {
-                    not: null,
-                  },
-                },
+          },
+          {
+            programEnrollment: {
+              tenantId: {
+                not: null,
               },
             },
-          ],
-        },
+          },
+        ],
       };
 
     default:

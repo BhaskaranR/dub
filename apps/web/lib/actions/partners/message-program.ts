@@ -13,10 +13,10 @@ import { authPartnerActionClient } from "../safe-action";
 
 // Message a program
 export const messageProgramAction = authPartnerActionClient
-  .schema(messageProgramSchema)
+  .inputSchema(messageProgramSchema)
   .action(async ({ parsedInput, ctx }) => {
     const { partner, user } = ctx;
-    const { programSlug, text, createdAt } = parsedInput;
+    const { programSlug, text } = parsedInput;
 
     const program = await prisma.program.findFirstOrThrow({
       select: {
@@ -67,7 +67,6 @@ export const messageProgramAction = authPartnerActionClient
         senderPartnerId: partner.id,
         senderUserId: user.id,
         text,
-        createdAt,
       },
       include: {
         senderUser: true,

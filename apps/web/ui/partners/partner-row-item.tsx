@@ -1,17 +1,22 @@
 import useProgram from "@/lib/swr/use-program";
+import { PartnerPayoutMethod } from "@dub/prisma/client";
 import { CircleArrowRight, DynamicTooltipWrapper, GreekTemple } from "@dub/ui";
-import { cn } from "@dub/utils";
+import { cn, formatDateTimeSmart } from "@dub/utils";
 import { OG_AVATAR_URL } from "@dub/utils/src/constants";
 import { CircleMinus } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { PartnerFraudIndicator } from "./fraud-risks/partner-fraud-indicator";
+import { getPayoutMethodLabel } from "./payouts/payout-method-config";
 
 interface PartnerRowItemProps {
   showPermalink?: boolean;
+  showFraudIndicator?: boolean;
   partner: {
     id: string;
     name: string;
     image?: string | null;
+    defaultPayoutMethod?: PartnerPayoutMethod | null;
     payoutsEnabledAt?: Date | null;
   };
 }
@@ -43,7 +48,7 @@ const PAYOUT_STATUS_CONFIG = {
   enabled: {
     title: "Payouts enabled",
     description:
-      "This partner has payouts enabled, which means they will be able to receive payouts from this program.",
+      "This partner has connected a payout method, which means they will be able to receive payouts.",
     icon: GreekTemple,
     iconClassName: "border-green-300 bg-green-200 text-green-800",
     indicatorColor: "bg-green-500",
@@ -51,7 +56,7 @@ const PAYOUT_STATUS_CONFIG = {
   disabled: {
     title: "Payouts disabled",
     description:
-      "This partner does not have payouts enabled, which means they will not be able to receive any payouts from this program.",
+      "This partner has not connected a payout method yet, which means they won't be able to receive payouts.",
     icon: CircleMinus,
     iconClassName: "border-red-300 bg-red-200 text-red-800",
     indicatorColor: "bg-red-500",
@@ -94,8 +99,10 @@ function usePartnerPayoutStatus(partner: PartnerRowItemProps["partner"]) {
 
 function PartnerPayoutStatusTooltip({
   statusKey,
+  partner,
 }: {
   statusKey: keyof typeof PAYOUT_STATUS_CONFIG | null;
+  partner: PartnerRowItemProps["partner"];
 }) {
   if (!statusKey) return null;
 
@@ -106,20 +113,37 @@ function PartnerPayoutStatusTooltip({
     iconClassName,
   } = PAYOUT_STATUS_CONFIG[statusKey];
 
+  const hasPayoutDetails =
+    statusKey === "enabled" &&
+    partner.payoutsEnabledAt &&
+    partner.defaultPayoutMethod;
+
   return (
-    <div className="grid max-w-xs gap-2 p-4">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        {title}
-        <div
-          className={cn(
-            iconClassName,
-            "flex size-5 items-center justify-center rounded-md border",
-          )}
-        >
-          <Icon className="size-3" />
+    <div className="max-w-xs">
+      <div className="grid gap-2 p-2.5">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          {title}
+          <div
+            className={cn(
+              iconClassName,
+              "flex size-5 items-center justify-center rounded-md border",
+            )}
+          >
+            <Icon className="size-3" />
+          </div>
+        </div>
+        <div className="text-pretty text-sm text-neutral-500">
+          {description}
         </div>
       </div>
-      <div className="text-pretty text-sm text-neutral-500">{description}</div>
+      {hasPayoutDetails && (
+        <div className="border-t border-neutral-100 p-2.5 text-xs text-neutral-600">
+          <span>
+            Connected {getPayoutMethodLabel(partner.defaultPayoutMethod!)}{" "}
+            {formatDateTimeSmart(partner.payoutsEnabledAt!)}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -127,6 +151,7 @@ function PartnerPayoutStatusTooltip({
 export function PartnerRowItem({
   partner,
   showPermalink = true,
+  showFraudIndicator = true,
 }: PartnerRowItemProps) {
   const { slug } = useParams();
   const { statusKey, showPayoutsEnabled } = usePartnerPayoutStatus(partner);
@@ -134,28 +159,40 @@ export function PartnerRowItem({
   const As = showPermalink ? Link : "div";
 
   return (
-    <div className="flex items-center gap-2">
-      <DynamicTooltipWrapper
-        tooltipProps={{
-          content: <PartnerPayoutStatusTooltip statusKey={statusKey} />,
-        }}
-      >
-        <div className="relative shrink-0">
-          <img
-            src={partner.image || `${OG_AVATAR_URL}${partner.name}`}
-            alt={partner.name}
-            className="size-5 shrink-0 rounded-full"
-          />
-          {showPayoutsEnabled && statusKey && (
-            <div
-              className={cn(
-                "absolute -bottom-0.5 -right-0.5 size-2 rounded-full",
-                PAYOUT_STATUS_CONFIG[statusKey].indicatorColor,
-              )}
+    <div className="flex min-w-0 items-center gap-2">
+      <div className="shrink-0">
+        <DynamicTooltipWrapper
+          tooltipProps={
+            statusKey
+              ? {
+                  content: (
+                    <PartnerPayoutStatusTooltip
+                      statusKey={statusKey}
+                      partner={partner}
+                    />
+                  ),
+                }
+              : undefined
+          }
+        >
+          <div className="relative shrink-0">
+            <img
+              src={partner.image || `${OG_AVATAR_URL}${partner.id}`}
+              alt={partner.id}
+              className="size-5 shrink-0 rounded-full"
             />
-          )}
-        </div>
-      </DynamicTooltipWrapper>
+            {showPayoutsEnabled && statusKey && (
+              <div
+                className={cn(
+                  "absolute -bottom-0.5 -right-0.5 size-2 rounded-full",
+                  PAYOUT_STATUS_CONFIG[statusKey].indicatorColor,
+                )}
+              />
+            )}
+          </div>
+        </DynamicTooltipWrapper>
+      </div>
+
       <As
         href={`/${slug}/program/partners/${partner.id}`}
         {...(showPermalink && { target: "_blank" })}
@@ -167,6 +204,8 @@ export function PartnerRowItem({
       >
         {partner.name}
       </As>
+
+      {showFraudIndicator && <PartnerFraudIndicator partnerId={partner.id} />}
     </div>
   );
 }

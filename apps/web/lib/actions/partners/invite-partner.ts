@@ -2,41 +2,49 @@
 
 import { recordAuditLog } from "@/lib/api/audit-logs/record-audit-log";
 import { createAndEnrollPartner } from "@/lib/api/partners/create-and-enroll-partner";
-import { getPartnerInviteRewardsAndBounties } from "@/lib/api/partners/get-partner-invite-rewards-and-bounties";
+import { getGroupRewardsAndBounties } from "@/lib/api/partners/get-group-rewards-and-bounties";
 import { getDefaultProgramIdOrThrow } from "@/lib/api/programs/get-default-program-id-or-throw";
 import { invitePartnerSchema } from "@/lib/zod/schemas/partners";
 import { sendEmail } from "@dub/email";
 import ProgramInvite from "@dub/email/templates/program-invite";
-import { prisma } from "@dub/prisma";
 import { waitUntil } from "@vercel/functions";
 import { getProgramOrThrow } from "../../api/programs/get-program-or-throw";
 import { authActionClient } from "../safe-action";
+import { throwIfNoPermission } from "../throw-if-no-permission";
 
 export const invitePartnerAction = authActionClient
-  .schema(invitePartnerSchema)
+  .inputSchema(invitePartnerSchema)
   .action(async ({ parsedInput, ctx }) => {
     const { workspace, user } = ctx;
-    const { email, username, groupId } = parsedInput;
+    const { groupId, email, username, name } = parsedInput;
+
+    throwIfNoPermission({
+      role: workspace.role,
+      requiredRoles: ["owner", "member"],
+    });
 
     const programId = getDefaultProgramIdOrThrow(workspace);
 
-    const [program, programEnrollment] = await Promise.all([
-      getProgramOrThrow({
-        workspaceId: workspace.id,
-        programId,
-      }),
-
-      prisma.programEnrollment.findFirst({
-        where: {
-          programId,
-          partner: {
-            email,
+    const program = await getProgramOrThrow({
+      workspaceId: workspace.id,
+      programId,
+      include: {
+        partners: {
+          where: {
+            partner: {
+              email,
+            },
           },
         },
-      }),
-    ]);
+        emailDomains: {
+          where: {
+            status: "verified",
+          },
+        },
+      },
+    });
 
-    if (programEnrollment) {
+    if (program.partners.length > 0) {
       const statusMessages = {
         invited: "has already been invited to",
         approved: "is already enrolled in",
@@ -45,7 +53,7 @@ export const invitePartnerAction = authActionClient
         pending: "has a pending application to join",
       };
 
-      const message = statusMessages[programEnrollment.status];
+      const message = statusMessages[program.partners[0].status];
 
       if (message) {
         throw new Error(`Partner ${email} ${message} this program.`);
@@ -62,6 +70,7 @@ export const invitePartnerAction = authActionClient
       partner: {
         email,
         username,
+        name,
         ...(groupId && { groupId }),
       },
       userId: user.id,
@@ -74,7 +83,7 @@ export const invitePartnerAction = authActionClient
 
     const sendPartnerInvitePromise = (async () => {
       try {
-        const rewardsAndBounties = await getPartnerInviteRewardsAndBounties({
+        const rewardsAndBounties = await getGroupRewardsAndBounties({
           programId,
           groupId: enrolledPartner.groupId || program.defaultGroupId,
         });
@@ -84,6 +93,11 @@ export const invitePartnerAction = authActionClient
             inviteEmailData?.subject ||
             `${program.name} invited you to join Dub Partners`,
           variant: "notifications",
+          // use the first verified email domain as the from email address
+          from:
+            program.emailDomains.length > 0
+              ? `${program.name} <partners@${program.emailDomains[0].slug}>`
+              : undefined,
           to: email,
           replyTo: program.supportEmail || "noreply",
           react: ProgramInvite({

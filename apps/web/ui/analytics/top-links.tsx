@@ -14,7 +14,7 @@ import { useAnalyticsFilterOption } from "./utils";
 
 type TabId = "links" | "urls";
 type LinksSubtab = "links" | "folders" | "tags";
-type UrlsSubtab = "full_urls" | "base_urls";
+type UrlsSubtab = "base_urls" | "full_urls";
 type Subtab = LinksSubtab | UrlsSubtab;
 
 const TAB_CONFIG: Record<
@@ -43,8 +43,8 @@ const TAB_CONFIG: Record<
     },
   },
   urls: {
-    subtabs: ["full_urls", "base_urls"],
-    defaultSubtab: "full_urls",
+    subtabs: ["base_urls", "full_urls"],
+    defaultSubtab: "base_urls",
     getSubtabLabel: (subtab) =>
       subtab === "full_urls" ? "Full URLs" : "Base URLs",
     getGroupBy: (subtab) => ({
@@ -53,10 +53,10 @@ const TAB_CONFIG: Record<
   },
 };
 
-export function TopLinks({ filterLinks = true }: { filterLinks?: boolean }) {
+export function TopLinks() {
   const { queryParams, searchParams } = useRouterStuff();
 
-  const { selectedTab, saleUnit, adminPage, partnerPage } =
+  const { selectedTab, saleUnit, adminPage, partnerPage, dashboardProps } =
     useContext(AnalyticsContext);
   const dataKey = selectedTab === "sales" ? saleUnit : "count";
 
@@ -105,7 +105,7 @@ export function TopLinks({ filterLinks = true }: { filterLinks?: boolean }) {
   );
 
   const subTabProps = useMemo(() => {
-    if (adminPage || partnerPage) return {};
+    if (adminPage || partnerPage || dashboardProps) return {};
     const config = TAB_CONFIG[tab];
     return {
       subTabs: config.subtabs.map((s) => ({
@@ -124,7 +124,7 @@ export function TopLinks({ filterLinks = true }: { filterLinks?: boolean }) {
         { id: "urls", label: "Destination URLs", icon: Globe },
       ]}
       expandLimit={8}
-      hasMore={(data?.length ?? 0) > 8}
+      dataLength={data?.length}
       selectedTabId={tab}
       onSelectTab={handleTabChange}
       {...subTabProps}
@@ -172,58 +172,54 @@ export function TopLinks({ filterLinks = true }: { filterLinks?: boolean }) {
 
                     // Determine href
                     let href: string | undefined;
-                    if (filterLinks) {
-                      if (isLinksSubtab) {
-                        const hasLinkFilter =
-                          searchParams.has("domain") && searchParams.has("key");
-                        href = queryParams({
-                          ...(hasLinkFilter
-                            ? { del: ["domain", "key"] }
-                            : {
-                                set: {
-                                  domain: d.domain,
-                                  key: d.key || "_root",
-                                },
-                              }),
-                          getNewPath: true,
-                        }) as string;
-                      } else if (isUrlsTab) {
-                        const hasUrlFilter = searchParams.has("url");
-                        href = queryParams({
-                          ...(hasUrlFilter
-                            ? { del: "url" }
-                            : {
-                                set: {
-                                  url: d.url,
-                                },
-                              }),
-                          getNewPath: true,
-                        }) as string;
-                      } else if (isFoldersSubtab) {
-                        const hasFolderFilter = searchParams.has("folderId");
-                        href = queryParams({
-                          ...(hasFolderFilter
-                            ? { del: "folderId" }
-                            : {
-                                set: {
-                                  folderId: d.folderId,
-                                },
-                              }),
-                          getNewPath: true,
-                        }) as string;
-                      } else if (isTagsSubtab) {
-                        const hasTagFilter = searchParams.has("tagIds");
-                        href = queryParams({
-                          ...(hasTagFilter
-                            ? { del: "tagIds" }
-                            : {
-                                set: {
-                                  tagIds: d.tagId,
-                                },
-                              }),
-                          getNewPath: true,
-                        }) as string;
-                      }
+                    if (isLinksSubtab) {
+                      href = queryParams({
+                        ...(searchParams.has("linkId")
+                          ? { del: ["linkId"] }
+                          : {
+                              set: {
+                                linkId: d.id,
+                              },
+                              del: ["domain", "key"],
+                            }),
+                        getNewPath: true,
+                      }) as string;
+                    } else if (isUrlsTab && subtab === "base_urls") {
+                      const hasUrlFilter = searchParams.has("url");
+                      href = queryParams({
+                        ...(hasUrlFilter
+                          ? { del: "url" }
+                          : {
+                              set: {
+                                url: d.url,
+                              },
+                            }),
+                        getNewPath: true,
+                      }) as string;
+                    } else if (isFoldersSubtab) {
+                      const hasFolderFilter = searchParams.has("folderId");
+                      href = queryParams({
+                        ...(hasFolderFilter
+                          ? { del: "folderId" }
+                          : {
+                              set: {
+                                folderId: d.folderId,
+                              },
+                            }),
+                        getNewPath: true,
+                      }) as string;
+                    } else if (isTagsSubtab) {
+                      const hasTagFilter = searchParams.has("tagId");
+                      href = queryParams({
+                        ...(hasTagFilter
+                          ? { del: "tagId" }
+                          : {
+                              set: {
+                                tagId: d.tagId,
+                              },
+                            }),
+                        getNewPath: true,
+                      }) as string;
                     }
 
                     return {

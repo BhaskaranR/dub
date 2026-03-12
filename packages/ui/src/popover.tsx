@@ -13,6 +13,7 @@ export type PopoverProps = PropsWithChildren<{
   openPopover: boolean;
   setOpenPopover: (open: boolean) => void;
   mobileOnly?: boolean;
+  forceDropdown?: boolean;
   popoverContentClassName?: string;
   onOpenAutoFocus?: PopoverPrimitive.PopoverContentProps["onOpenAutoFocus"];
   collisionBoundary?: Element | Element[];
@@ -30,6 +31,7 @@ export function Popover({
   openPopover,
   setOpenPopover,
   mobileOnly,
+  forceDropdown,
   popoverContentClassName,
   onOpenAutoFocus,
   collisionBoundary,
@@ -40,7 +42,7 @@ export function Popover({
 }: PopoverProps) {
   const { isMobile } = useMediaQuery();
 
-  if (mobileOnly || isMobile) {
+  if (!forceDropdown && (mobileOnly || isMobile)) {
     return (
       <Drawer.Root open={openPopover} onOpenChange={setOpenPopover}>
         <Drawer.Trigger className="sm:hidden" asChild>
@@ -64,7 +66,7 @@ export function Popover({
             <div className="sticky top-0 z-20 flex w-full items-center justify-center rounded-t-[10px] bg-inherit">
               <div className="bg-border-default my-3 h-1 w-12 rounded-full" />
             </div>
-            <div className="bg-bg-default flex min-h-[150px] w-full items-center justify-center overflow-hidden pb-8 align-middle shadow-xl">
+            <div className="bg-bg-default flex w-full items-center justify-center overflow-hidden pb-4 align-middle shadow-xl">
               {content}
             </div>
           </Drawer.Content>

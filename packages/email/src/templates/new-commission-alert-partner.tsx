@@ -64,7 +64,7 @@ export default function NewCommissionAlertPartner({
           <Container className="mx-auto my-10 max-w-[600px] rounded border border-solid border-neutral-200 px-10 py-5">
             <Section className="mt-8">
               <Img
-                src={program.logo || "https://assets.dub.co/logo.png"}
+                src={program.logo || "https://assets.dub.co/wordmark.png"}
                 height="32"
                 alt={program.name}
               />
@@ -126,7 +126,7 @@ export default function NewCommissionAlertPartner({
               ) : (
                 ` for this ${commission.type}`
               )}
-              {group.holdingPeriodDays > 0 ? (
+              {commission.type !== "custom" && group.holdingPeriodDays > 0 ? (
                 <>
                   {" "}
                   and it will be eligible for payout after the program's{" "}
@@ -159,7 +159,7 @@ export default function NewCommissionAlertPartner({
             </Section>
             <Footer
               email={email}
-              notificationSettingsUrl="https://partners.dub.co/settings/notifications"
+              notificationSettingsUrl="https://partners.dub.co/profile/notifications"
             />
           </Container>
         </Body>

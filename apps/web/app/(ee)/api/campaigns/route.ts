@@ -14,7 +14,7 @@ import {
   WORKFLOW_ATTRIBUTE_TRIGGER,
 } from "@/lib/zod/schemas/workflows";
 import { prisma } from "@dub/prisma";
-import { CampaignStatus } from "@prisma/client";
+import { CampaignStatus } from "@dub/prisma/client";
 import { NextResponse } from "next/server";
 
 // GET /api/campaigns - get all email campaigns for a program
@@ -22,8 +22,14 @@ export const GET = withWorkspace(
   async ({ workspace, searchParams }) => {
     const programId = getDefaultProgramIdOrThrow(workspace);
 
-    const { type, status, search, triggerCondition, page, pageSize } =
-      getCampaignsQuerySchema.parse(searchParams);
+    const {
+      type,
+      status,
+      search,
+      triggerCondition,
+      page = 1,
+      pageSize,
+    } = getCampaignsQuerySchema.parse(searchParams);
 
     const campaigns = await prisma.campaign.findMany({
       where: {
@@ -135,5 +141,6 @@ export const POST = withWorkspace(
   },
   {
     requiredPlan: ["advanced", "enterprise"],
+    requiredRoles: ["owner", "member"],
   },
 );

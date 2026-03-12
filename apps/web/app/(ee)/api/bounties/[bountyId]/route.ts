@@ -1,19 +1,24 @@
 import { recordAuditLog } from "@/lib/api/audit-logs/record-audit-log";
-import { generatePerformanceBountyName } from "@/lib/api/bounties/generate-performance-bounty-name";
-import { getBountyWithDetails } from "@/lib/api/bounties/get-bounty-with-details";
-import { PERFORMANCE_BOUNTY_SCOPE_ATTRIBUTES } from "@/lib/api/bounties/performance-bounty-scope-attributes";
-import { validateBounty } from "@/lib/api/bounties/validate-bounty";
 import { DubApiError } from "@/lib/api/errors";
 import { throwIfInvalidGroupIds } from "@/lib/api/groups/throw-if-invalid-group-ids";
 import { getDefaultProgramIdOrThrow } from "@/lib/api/programs/get-default-program-id-or-throw";
 import { parseRequestBody } from "@/lib/api/utils";
 import { withWorkspace } from "@/lib/auth";
+import { generatePerformanceBountyName } from "@/lib/bounty/api/generate-performance-bounty-name";
+import { getBountyWithDetails } from "@/lib/bounty/api/get-bounty-with-details";
+import { PERFORMANCE_BOUNTY_SCOPE_ATTRIBUTES } from "@/lib/bounty/api/performance-bounty-scope-attributes";
+import { validateBounty } from "@/lib/bounty/api/validate-bounty";
+import { getPlanCapabilities } from "@/lib/plan-capabilities";
 import { WorkflowCondition } from "@/lib/types";
 import { sendWorkspaceWebhook } from "@/lib/webhook/publish";
-import { BountySchema, updateBountySchema } from "@/lib/zod/schemas/bounties";
+import {
+  BountySchema,
+  submissionRequirementsSchema,
+  updateBountySchema,
+} from "@/lib/zod/schemas/bounties";
 import { prisma } from "@dub/prisma";
-import { arrayEqual } from "@dub/utils";
-import { PartnerGroup, Prisma } from "@prisma/client";
+import { PartnerGroup, Prisma } from "@dub/prisma/client";
+import { arrayEqual, deepEqual } from "@dub/utils";
 import { waitUntil } from "@vercel/functions";
 import { NextResponse } from "next/server";
 
@@ -57,6 +62,8 @@ export const PATCH = withWorkspace(
       startsAt,
       endsAt,
       submissionsOpenAt,
+      submissionFrequency,
+      maxSubmissions,
       rewardAmount,
       rewardDescription,
       submissionRequirements,
@@ -83,12 +90,30 @@ export const PATCH = withWorkspace(
     validateBounty({
       type: bounty.type,
       startsAt,
-      endsAt,
+      endsAt: endsAt !== undefined ? endsAt : bounty.endsAt,
       submissionsOpenAt,
+      submissionFrequency:
+        submissionFrequency !== undefined
+          ? submissionFrequency
+          : bounty.submissionFrequency,
+      maxSubmissions:
+        maxSubmissions !== undefined ? maxSubmissions : bounty.maxSubmissions,
+      submissionRequirements,
       rewardAmount,
       rewardDescription,
       performanceScope: bounty.performanceScope,
     });
+
+    if (
+      submissionRequirements !== undefined &&
+      submissionRequirements?.socialMetrics &&
+      !getPlanCapabilities(workspace.plan).canUseBountySocialMetrics
+    ) {
+      throw new DubApiError({
+        code: "forbidden",
+        message: "Social metrics criteria require Advanced plan or above.",
+      });
+    }
 
     // TODO:
     // When we do archive, make sure it disables the workflow
@@ -126,6 +151,31 @@ export const PATCH = withWorkspace(
       }
     }
 
+    // Prevent update if `submissionRequirements.socialMetrics` differs from the current value if there are existing submissions
+    if (submissionRequirements) {
+      const submissionCount = bounty._count.submissions;
+
+      const currentSocialMetrics = bounty.submissionRequirements
+        ? submissionRequirementsSchema.parse(bounty.submissionRequirements)
+            .socialMetrics ?? {}
+        : {};
+
+      const incomingSocialMetrics =
+        submissionRequirementsSchema.parse(submissionRequirements)
+          .socialMetrics ?? {};
+
+      if (
+        !deepEqual(currentSocialMetrics, incomingSocialMetrics) &&
+        submissionCount > 0
+      ) {
+        throw new DubApiError({
+          code: "bad_request",
+          message:
+            "You cannot change the social metrics criteria because the bounty has submissions.",
+        });
+      }
+    }
+
     // Bounty name
     let bountyName = name;
 
@@ -148,7 +198,14 @@ export const PATCH = withWorkspace(
           endsAt,
           submissionsOpenAt:
             bounty.type === "submission" ? submissionsOpenAt : null,
-          rewardAmount,
+          ...(bounty.type === "submission" &&
+            submissionFrequency !== undefined && { submissionFrequency }),
+          ...(bounty.type === "submission" &&
+            maxSubmissions !== undefined && {
+              maxSubmissions: maxSubmissions ?? 1,
+            }),
+          rewardAmount:
+            rewardAmount !== undefined ? rewardAmount : bounty.rewardAmount,
           rewardDescription,
           ...(bounty.type === "submission" &&
             submissionRequirements !== undefined && {
@@ -228,6 +285,7 @@ export const PATCH = withWorkspace(
       "advanced",
       "enterprise",
     ],
+    requiredRoles: ["owner", "member"],
   },
 );
 
@@ -311,5 +369,6 @@ export const DELETE = withWorkspace(
       "advanced",
       "enterprise",
     ],
+    requiredRoles: ["owner", "member"],
   },
 );

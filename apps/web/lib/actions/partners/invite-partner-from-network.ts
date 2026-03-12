@@ -3,8 +3,8 @@
 import { recordAuditLog } from "@/lib/api/audit-logs/record-audit-log";
 import { createId } from "@/lib/api/create-id";
 import { createAndEnrollPartner } from "@/lib/api/partners/create-and-enroll-partner";
+import { getGroupRewardsAndBounties } from "@/lib/api/partners/get-group-rewards-and-bounties";
 import { getNetworkInvitesUsage } from "@/lib/api/partners/get-network-invites-usage";
-import { getPartnerInviteRewardsAndBounties } from "@/lib/api/partners/get-partner-invite-rewards-and-bounties";
 import { getDefaultProgramIdOrThrow } from "@/lib/api/programs/get-default-program-id-or-throw";
 import { invitePartnerFromNetworkSchema } from "@/lib/zod/schemas/partner-network";
 import { sendEmail } from "@dub/email";
@@ -13,11 +13,17 @@ import { prisma } from "@dub/prisma";
 import { waitUntil } from "@vercel/functions";
 import { getProgramOrThrow } from "../../api/programs/get-program-or-throw";
 import { authActionClient } from "../safe-action";
+import { throwIfNoPermission } from "../throw-if-no-permission";
 
 export const invitePartnerFromNetworkAction = authActionClient
-  .schema(invitePartnerFromNetworkSchema)
+  .inputSchema(invitePartnerFromNetworkSchema)
   .action(async ({ parsedInput, ctx }) => {
     const { workspace, user } = ctx;
+
+    throwIfNoPermission({
+      role: workspace.role,
+      requiredRoles: ["owner", "member"],
+    });
 
     const networkInvitesUsage = await getNetworkInvitesUsage(workspace);
 
@@ -50,9 +56,6 @@ export const invitePartnerFromNetworkAction = authActionClient
 
     if (!partner || !partner.email)
       throw new Error("Partner not found or already enrolled in this program.");
-
-    if (!groupId && !program.defaultGroupId)
-      throw new Error("No group ID provided and no default group ID found.");
 
     const enrolledPartner = await createAndEnrollPartner({
       workspace,
@@ -88,6 +91,10 @@ export const invitePartnerFromNetworkAction = authActionClient
       Promise.allSettled([
         (async () => {
           if (!partner.email) return;
+          const rewardsAndBounties = await getGroupRewardsAndBounties({
+            programId,
+            groupId: enrolledPartner.groupId || program.defaultGroupId,
+          });
           await sendEmail({
             subject: `${program.name} invited you to join on Dub Partners`,
             variant: "notifications",
@@ -100,10 +107,7 @@ export const invitePartnerFromNetworkAction = authActionClient
                 slug: program.slug,
                 logo: program.logo,
               },
-              ...(await getPartnerInviteRewardsAndBounties({
-                programId,
-                groupId: enrolledPartner.groupId || program.defaultGroupId,
-              })),
+              ...rewardsAndBounties,
             }),
           });
         })(),

@@ -1,7 +1,9 @@
 import { createId } from "@/lib/api/create-id";
 import { DubApiError } from "@/lib/api/errors";
 import { includeTags } from "@/lib/api/links/include-tags";
+import { syncPartnerLinksStats } from "@/lib/api/partners/sync-partner-links-stats";
 import { generateRandomName } from "@/lib/names";
+import { sendPartnerPostback } from "@/lib/postback/api/send-partner-postback";
 import { getClickEvent, recordLead } from "@/lib/tinybird";
 import { sendWorkspaceWebhook } from "@/lib/webhook/publish";
 import { transformLeadEventData } from "@/lib/webhook/transform";
@@ -103,17 +105,53 @@ export async function createShopifyLead({
   ]);
 
   waitUntil(
-    sendWorkspaceWebhook({
-      trigger: "lead.created",
-      workspace,
-      data: transformLeadEventData({
-        ...clickData,
-        eventName,
-        link,
-        customer,
-        metadata: null,
+    Promise.allSettled([
+      sendWorkspaceWebhook({
+        trigger: "lead.created",
+        workspace,
+        data: transformLeadEventData({
+          ...clickData,
+          eventName,
+          link,
+          customer,
+          metadata: null,
+        }),
       }),
-    }),
+
+      ...(link.partnerId
+        ? [
+            sendPartnerPostback({
+              partnerId: link.partnerId,
+              event: "lead.created",
+              data: {
+                ...clickData,
+                eventName,
+                link,
+                customer,
+              },
+            }),
+          ]
+        : []),
+
+      ...(link.programId && link.partnerId
+        ? [
+            syncPartnerLinksStats({
+              partnerId: link.partnerId,
+              programId: link.programId,
+              eventType: "lead",
+            }),
+            prisma.customer.update({
+              where: {
+                id: customer.id,
+              },
+              data: {
+                programId: link.programId,
+                partnerId: link.partnerId,
+              },
+            }),
+          ]
+        : []),
+    ]),
   );
 
   return leadData;

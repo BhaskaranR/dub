@@ -1,11 +1,15 @@
 import { qstash } from "@/lib/cron";
 import { prisma } from "@dub/prisma";
+import { Invoice } from "@dub/prisma/client";
 import { APP_DOMAIN_WITH_NGROK, chunk, log } from "@dub/utils";
-import { Invoice } from "@prisma/client";
-import { z } from "zod";
+import * as z from "zod/v4";
 
 const stripeChargeMetadataSchema = z.object({
   id: z.string(), // Stripe charge id
+});
+
+const queue = qstash.queue({
+  queueName: "send-stripe-payout",
 });
 
 export async function queueStripePayouts(
@@ -45,18 +49,26 @@ export async function queueStripePayouts(
       invoiceId,
       status: "processing",
       mode: "internal",
+      method: {
+        in: ["connect", "stablecoin"],
+      },
       partner: {
-        stripeConnectId: {
-          not: null,
-        },
+        OR: [
+          {
+            stripeConnectId: {
+              not: null,
+            },
+          },
+          {
+            stripeRecipientId: {
+              not: null,
+            },
+          },
+        ],
         // here we're not checking for payoutsEnabledAt since we want visiblity
         // if a stripe.transfers.create fails due to restricted Stripe account
       },
     },
-  });
-
-  const queue = qstash.queue({
-    queueName: "send-stripe-payout",
   });
 
   const chunkedPartners = chunk(partnersInCurrentInvoice, 100);
@@ -70,8 +82,8 @@ export async function queueStripePayouts(
           deduplicationId: `${invoiceId}-${partnerId}`,
           method: "POST",
           body: {
-            invoiceId,
             partnerId,
+            invoiceId,
             // only pass chargeId if payment method is card
             // this is because we're passing chargeId as source_transaction for card payouts since card payouts can take a short time to settle fully
             // we omit chargeId/source_transaction for other payment methods (ACH, SEPA, etc.) since those settle via charge.succeeded webhook after ~4 days

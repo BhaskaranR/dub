@@ -78,16 +78,6 @@ export function PartnersUpgradeModal({
             },
           },
           {
-            id: "messages",
-            text: "Messaging center",
-            tooltip: {
-              title:
-                "Easily communicate with your partners using our messaging center.",
-              cta: "Learn more.",
-              href: "https://dub.co/help/article/messaging-partners",
-            },
-          },
-          {
             id: "email",
             text: "Email campaigns",
             tooltip: {
@@ -98,8 +88,28 @@ export function PartnersUpgradeModal({
             },
           },
           {
+            id: "messages",
+            text: "Messaging center",
+            tooltip: {
+              title:
+                "Easily communicate with your partners using our messaging center.",
+              cta: "Learn more.",
+              href: "https://dub.co/help/article/messaging-partners",
+            },
+          },
+          {
+            id: "sso",
+            text: "Fraud detection",
+            tooltip: {
+              title:
+                "Safeguard your partner program by automatically flagging, reviewing, and resolving suspicious activity.",
+              cta: "Learn more.",
+              href: "https://dub.co/help/article/fraud-detection",
+            },
+          },
+          {
             id: "partnergroups",
-            text: `${plan.limits.groups} partner groups`,
+            text: `${plan.limits.groups < INFINITY_NUMBER ? plan.limits.groups : "Unlimited"} partner groups`,
             tooltip: {
               title:
                 "Learn how you can create partner groups to segment partners by rewards, discounts, performance, location, and more.",
@@ -149,7 +159,7 @@ export function PartnersUpgradeModal({
     <Modal
       showModal={showPartnersUpgradeModal}
       setShowModal={setShowPartnersUpgradeModal}
-      onClose={() => queryParams({ del: "plan" })}
+      onClose={() => queryParams({ del: "showPartnersUpgradeModal" })}
     >
       <div className="scrollbar-hide relative max-h-[calc(100dvh-50px)] overflow-y-auto p-4 sm:p-8">
         <div className="pointer-events-none absolute inset-y-0 left-1/2 hidden w-[640px] -translate-x-1/2 [mask-image:linear-gradient(black,transparent_280px)] sm:block">
@@ -273,7 +283,7 @@ export function PartnersUpgradeModal({
             variant="secondary"
             onClick={() => {
               setShowPartnersUpgradeModal(false);
-              queryParams({ del: "plan" });
+              queryParams({ del: "showPartnersUpgradeModal" });
             }}
           />
         </div>
@@ -283,7 +293,7 @@ export function PartnersUpgradeModal({
 }
 
 export function usePartnersUpgradeModal(
-  props: Omit<
+  props?: Omit<
     PartnersUpgradeModalProps,
     "showPartnersUpgradeModal" | "setShowPartnersUpgradeModal"
   >,

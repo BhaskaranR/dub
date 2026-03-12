@@ -3,7 +3,6 @@
 import { confirmEmailChange } from "@/lib/auth/confirm-email-change";
 import { throwIfNoPermission } from "@/lib/auth/partner-users/throw-if-no-permission";
 import { qstash } from "@/lib/cron";
-import { getDiscoverabilityRequirements } from "@/lib/partners/get-discoverability-requirements";
 import { storage } from "@/lib/storage";
 import { stripe } from "@/lib/stripe";
 import { partnerProfileChangeHistoryLogSchema } from "@/lib/zod/schemas/partner-profile";
@@ -12,6 +11,7 @@ import {
   PartnerProfileSchema,
 } from "@/lib/zod/schemas/partners";
 import { prisma } from "@dub/prisma";
+import { Partner, PartnerProfileType } from "@dub/prisma/client";
 import {
   APP_DOMAIN_WITH_NGROK,
   COUNTRIES,
@@ -19,24 +19,22 @@ import {
   nanoid,
   PARTNERS_DOMAIN,
 } from "@dub/utils";
-import { Partner, PartnerProfileType } from "@prisma/client";
 import { waitUntil } from "@vercel/functions";
-import z from "../../zod";
+import * as z from "zod/v4";
 import { uploadedImageSchema } from "../../zod/schemas/misc";
 import { authPartnerActionClient } from "../safe-action";
 
 const updatePartnerProfileSchema = z
   .object({
     name: z.string().optional(),
-    email: z.string().email().optional(),
+    email: z.email().optional(),
     image: uploadedImageSchema.nullish(),
     description: z.string().max(MAX_PARTNER_DESCRIPTION_LENGTH).nullish(),
     country: z.enum(Object.keys(COUNTRIES) as [string, ...string[]]).nullish(),
-    profileType: z.nativeEnum(PartnerProfileType).optional(),
+    profileType: z.enum(PartnerProfileType).optional(),
     companyName: z.string().nullish(),
-    discoverable: z.boolean().optional(),
   })
-  .merge(PartnerProfileSchema.partial())
+  .extend(PartnerProfileSchema.partial().shape)
   .transform((data) => ({
     ...data,
     companyName: data.profileType === "individual" ? null : data.companyName,
@@ -44,7 +42,7 @@ const updatePartnerProfileSchema = z
 
 // Update a partner profile
 export const updatePartnerProfileAction = authPartnerActionClient
-  .schema(updatePartnerProfileSchema)
+  .inputSchema(updatePartnerProfileSchema)
   .action(async ({ ctx, parsedInput }) => {
     const { partner, partnerUser } = ctx;
 
@@ -65,7 +63,6 @@ export const updatePartnerProfileAction = authPartnerActionClient
       industryInterests,
       preferredEarningStructures,
       salesChannels,
-      discoverable,
     } = parsedInput;
 
     if (
@@ -105,12 +102,6 @@ export const updatePartnerProfileAction = authPartnerActionClient
           profileType,
           companyName,
           monthlyTraffic,
-          discoverableAt: discoverable
-            ? new Date()
-            : discoverable === false
-              ? null
-              : undefined,
-
           ...(industryInterests && {
             industryInterests: {
               deleteMany: {},
@@ -142,6 +133,7 @@ export const updatePartnerProfileAction = authPartnerActionClient
           preferredEarningStructures: true,
           salesChannels: true,
           programs: true,
+          platforms: true,
         },
       });
 
@@ -173,45 +165,6 @@ export const updatePartnerProfileAction = authPartnerActionClient
       waitUntil(
         Promise.allSettled([
           (async () => {
-            // double check that the partner is still eligible for discovery
-            if (updatedPartner.discoverableAt) {
-              const partnerDiscoveryRequirements =
-                getDiscoverabilityRequirements({
-                  partner: {
-                    ...updatedPartner,
-                    preferredEarningStructures:
-                      updatedPartner.preferredEarningStructures?.map(
-                        (structure) => structure.preferredEarningStructure,
-                      ),
-                    salesChannels: updatedPartner.salesChannels?.map(
-                      (channel) => channel.salesChannel,
-                    ),
-                  },
-                  programEnrollments: updatedPartner.programs,
-                });
-
-              if (
-                !partnerDiscoveryRequirements.every(
-                  (requirement) => requirement.completed,
-                )
-              ) {
-                console.log(
-                  `Partner ${partner.id} is no longer eligible for discovery due to missing requirements: ${partnerDiscoveryRequirements
-                    .filter((requirement) => !requirement.completed)
-                    .map((requirement) => requirement.label)
-                    .join(", ")}`,
-                );
-                await prisma.partner.update({
-                  where: {
-                    id: partner.id,
-                  },
-                  data: {
-                    discoverableAt: null,
-                  },
-                });
-              }
-            }
-
             const shouldExpireCache = !deepEqual(
               {
                 name: partner.name,

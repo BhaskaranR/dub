@@ -1,7 +1,7 @@
 import { ProcessedLinkProps } from "@/lib/types";
 import { prisma } from "@dub/prisma";
+import { Prisma } from "@dub/prisma/client";
 import { getParamsFromURL, linkConstructorSimple, truncate } from "@dub/utils";
-import { Prisma } from "@prisma/client";
 import { waitUntil } from "@vercel/functions";
 import { createId } from "../create-id";
 import { combineTagIds } from "../tags/combine-tag-ids";
@@ -10,11 +10,9 @@ import { includeProgramEnrollment } from "./include-program-enrollment";
 import { includeTags } from "./include-tags";
 import { propagateBulkLinkChanges } from "./propagate-bulk-link-changes";
 import { updateLinksUsage } from "./update-links-usage";
-import {
-  checkIfLinksHaveTags,
-  checkIfLinksHaveWebhooks,
-  transformLink,
-} from "./utils";
+import { checkIfLinksHaveTags } from "./utils/check-if-links-have-tags";
+import { checkIfLinksHaveWebhooks } from "./utils/check-if-links-have-webhooks";
+import { transformLink } from "./utils/transform-link";
 
 export async function bulkCreateLinks({
   links,
@@ -127,8 +125,11 @@ export async function bulkCreateLinks({
         );
       }
 
-      createdLinksData.forEach((link, idx) => {
-        const originalLink = links[idx];
+      createdLinksData.forEach((link) => {
+        const originalIndex = shortLinkToIndexMap.get(link.shortLink);
+        if (originalIndex === undefined) return;
+
+        const originalLink = links[originalIndex];
         if (!originalLink) return;
 
         const { tagId, tagIds, tagNames } = originalLink;
@@ -169,8 +170,11 @@ export async function bulkCreateLinks({
     if (hasWebhooks) {
       const linkWebhooksToCreate: { linkId: string; webhookId: string }[] = [];
 
-      createdLinksData.forEach((link, idx) => {
-        const originalLink = links[idx];
+      createdLinksData.forEach((link) => {
+        const originalIndex = shortLinkToIndexMap.get(link.shortLink);
+        if (originalIndex === undefined) return;
+
+        const originalLink = links[originalIndex];
         if (!originalLink?.webhookIds?.length) return;
 
         originalLink.webhookIds.forEach((webhookId) => {

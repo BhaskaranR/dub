@@ -1,7 +1,7 @@
 import { qstash } from "@/lib/cron";
 import { redis } from "@/lib/upstash";
 import { APP_DOMAIN_WITH_NGROK } from "@dub/utils";
-import { z } from "zod";
+import * as z from "zod/v4";
 import { toltImportPayloadSchema } from "./schemas";
 import { ToltCredentials } from "./types";
 
@@ -37,6 +37,7 @@ class ToltImporter {
     return await qstash.publishJSON({
       url: `${APP_DOMAIN_WITH_NGROK}/api/cron/import/tolt`,
       body,
+      contentBasedDeduplication: true,
     });
   }
 

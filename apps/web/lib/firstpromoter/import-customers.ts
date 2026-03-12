@@ -1,6 +1,6 @@
 import { prisma } from "@dub/prisma";
+import { Customer, Link, Project } from "@dub/prisma/client";
 import { nanoid } from "@dub/utils";
-import { Link, Project } from "@prisma/client";
 import { createId } from "../api/create-id";
 import { updateLinkStatsForImporter } from "../api/links/update-link-stats-for-importer";
 import { syncPartnerLinksStats } from "../api/partners/sync-partner-links-stats";
@@ -120,6 +120,22 @@ export async function importCustomers(payload: FirstPromoterImportPayload) {
         {} as Record<string, Date>,
       );
 
+      const existingCustomers = await prisma.customer.findMany({
+        where: {
+          projectId: workspace.id,
+          OR: [
+            { email: { in: customers.map(({ email }) => email) } },
+            {
+              externalId: {
+                in: customers
+                  .map(({ uid }) => uid)
+                  .filter((c): c is NonNullable<typeof c> => c !== null),
+              },
+            },
+          ],
+        },
+      });
+
       await Promise.allSettled(
         customers.map((customer) => {
           const links =
@@ -130,6 +146,7 @@ export async function importCustomers(payload: FirstPromoterImportPayload) {
             workspace,
             links,
             customer,
+            existingCustomers,
             latestLeadAt:
               partnerEmailToLatestLeadAt[
                 customer.promoter_campaign.promoter.email
@@ -157,6 +174,7 @@ async function createCustomer({
   workspace,
   links,
   customer,
+  existingCustomers,
   latestLeadAt,
   importId,
 }: {
@@ -166,6 +184,7 @@ async function createCustomer({
     "id" | "key" | "domain" | "url" | "partnerId" | "programId" | "lastLeadAt"
   >[];
   customer: FirstPromoterCustomer;
+  existingCustomers: Customer[];
   latestLeadAt: Date;
   importId: string;
 }) {
@@ -198,12 +217,9 @@ async function createCustomer({
   }
 
   // Find the customer by email address
-  const customerFound = await prisma.customer.findFirst({
-    where: {
-      projectId: workspace.id,
-      OR: [{ externalId: customer.uid }, { email: customer.email }],
-    },
-  });
+  const customerFound = existingCustomers.find(
+    (c) => c.email === customer.email || c.externalId === customer.uid,
+  );
 
   if (customerFound) {
     console.log(`A customer already exists with email ${customer.email}`);
@@ -256,6 +272,8 @@ async function createCustomer({
         projectConnectId: workspace.stripeConnectId,
         clickId: clickEvent.click_id,
         linkId: link.id,
+        programId: link.programId,
+        partnerId: link.partnerId,
         country: clickEvent.country,
         clickedAt: new Date(customer.created_at),
         createdAt: new Date(customer.created_at),

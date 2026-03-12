@@ -4,6 +4,7 @@ import {
   ProgramEnrollmentProps,
 } from "@/lib/types";
 import { Dashboard, Link, Tag } from "@dub/prisma/client";
+import { toCentsNumber } from "@dub/utils";
 import { prefixWorkspaceId } from "../../workspaces/workspace-id";
 import { decodeLinkIfCaseSensitive } from "../case-sensitivity";
 
@@ -13,7 +14,12 @@ export type ExpandedLink = Link & {
   tags?: { tag: Pick<Tag, "id" | "name" | "color"> }[];
   webhooks?: { webhookId: string }[];
   dashboard?: Dashboard | null;
-  partner?: Pick<PartnerProps, "id" | "name" | "image"> | null;
+  partner?:
+    | (Pick<PartnerProps, "id" | "name" | "image"> & {
+        groupId?: string | null;
+        tenantId?: string | null;
+      })
+    | null;
   discount?: Pick<
     DiscountProps,
     "id" | "amount" | "type" | "maxDuration" | "couponId" | "couponTestId"
@@ -47,6 +53,7 @@ export const transformLink = (
 
   return {
     ...rest,
+    saleAmount: toCentsNumber(rest.saleAmount),
     identifier: null, // backwards compatibility
     tagId: tags?.[0]?.id ?? null, // backwards compatibility
     tags,

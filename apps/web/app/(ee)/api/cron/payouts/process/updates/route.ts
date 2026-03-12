@@ -6,7 +6,7 @@ import { sendBatchEmail } from "@dub/email";
 import PartnerPayoutConfirmed from "@dub/email/templates/partner-payout-confirmed";
 import { prisma } from "@dub/prisma";
 import { APP_DOMAIN_WITH_NGROK, currencyFormatter, log } from "@dub/utils";
-import { z } from "zod";
+import * as z from "zod/v4";
 import { logAndRespond } from "../../../utils";
 
 export const dynamic = "force-dynamic";
@@ -61,8 +61,7 @@ export async function POST(req: Request) {
     }
 
     const auditLogResponse = await recordAuditLog(
-      payouts.map((p) => {
-        const { program, partner, invoice, ...payout } = p;
+      payouts.map(({ program, partner, invoice, ...payout }) => {
         return {
           workspaceId: program.workspaceId,
           programId: program.id,
@@ -108,10 +107,12 @@ export async function POST(req: Request) {
             payout: {
               id: payout.id,
               amount: payout.amount,
+              initiatedAt: payout.initiatedAt,
               startDate: payout.periodStart,
               endDate: payout.periodEnd,
               mode: payout.mode,
               paymentMethod: invoice.paymentMethod ?? "ach",
+              payoutMethod: payout.partner.defaultPayoutMethod ?? null,
             },
           }),
         })),

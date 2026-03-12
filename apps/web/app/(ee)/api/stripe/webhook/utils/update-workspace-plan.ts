@@ -1,11 +1,15 @@
 import { deleteWorkspaceFolders } from "@/lib/api/folders/delete-workspace-folders";
+import { deactivateProgram } from "@/lib/api/programs/deactivate-program";
 import { tokenCache } from "@/lib/auth/token-cache";
+import { syncUserPlanToPlain } from "@/lib/plain/sync-user-plan";
 import { getPlanCapabilities } from "@/lib/plan-capabilities";
+import { wouldLosePartnerAccess } from "@/lib/plans/has-partner-access";
 import { WorkspaceProps } from "@/lib/types";
 import { webhookCache } from "@/lib/webhook/cache";
 import { prisma } from "@dub/prisma";
 import { getPlanAndTierFromPriceId } from "@dub/utils";
 import { NEW_BUSINESS_PRICE_IDS } from "@dub/utils/src";
+import { waitUntil } from "@vercel/functions";
 
 export async function updateWorkspacePlan({
   workspace,
@@ -34,8 +38,9 @@ export async function updateWorkspacePlan({
 
   const newPlanName = newPlan.name.toLowerCase();
   const shouldDisableWebhooks = newPlanName === "free" || newPlanName === "pro";
-  const shouldDeleteFolders =
-    newPlanName === "free" && workspace.foldersUsage > 0;
+
+  const { canManageProgram, canMessagePartners } =
+    getPlanCapabilities(newPlanName);
 
   // If a workspace upgrades/downgrades their subscription
   // or if the payouts limit increases and the updated price ID is a new business price ID
@@ -46,7 +51,7 @@ export async function updateWorkspacePlan({
     (workspace.payoutsLimit < newPlan.limits.payouts &&
       NEW_BUSINESS_PRICE_IDS.includes(priceId))
   ) {
-    await Promise.allSettled([
+    const [updatedWorkspace] = await Promise.allSettled([
       prisma.project.update({
         where: {
           id: workspace.id,
@@ -65,7 +70,26 @@ export async function updateWorkspacePlan({
           networkInvitesLimit: newPlan.limits.networkInvites,
           usersLimit: newPlan.limits.users,
           paymentFailedAt: null,
-          ...(shouldDeleteFolders && { foldersUsage: 0 }),
+        },
+        include: {
+          users: {
+            where: {
+              role: "owner",
+            },
+            select: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "asc",
+            },
+            take: 1,
+          },
         },
       }),
 
@@ -76,7 +100,7 @@ export async function updateWorkspacePlan({
         ),
       }),
 
-      // disable/enable program messaging if workspace has a program
+      // if workspace has a program, need to update deactivatedAt and messagingEnabledAt columns based on the plan capabilities
       ...(workspace.defaultProgramId
         ? [
             prisma.program.update({
@@ -84,10 +108,8 @@ export async function updateWorkspacePlan({
                 id: workspace.defaultProgramId,
               },
               data: {
-                messagingEnabledAt: getPlanCapabilities(newPlanName)
-                  .canMessagePartners
-                  ? new Date()
-                  : null,
+                deactivatedAt: canManageProgram ? null : undefined,
+                messagingEnabledAt: canMessagePartners ? new Date() : null,
               },
             }),
           ]
@@ -135,10 +157,31 @@ export async function updateWorkspacePlan({
 
     // Delete the folders if the new plan is free
     // For downgrade from Business → Pro, it should be fine since we're accounting that to make sure all folders get write access.
-    if (shouldDeleteFolders) {
+    if (newPlanName === "free") {
       await deleteWorkspaceFolders({
         workspaceId: workspace.id,
+        defaultProgramId: workspace.defaultProgramId,
       });
+    }
+
+    // Deactivate the program if the workspace loses partner access (Business/Enterprise -> Pro/Free)
+    if (
+      wouldLosePartnerAccess({
+        currentPlan: workspace.plan,
+        newPlan: newPlanName,
+      })
+    ) {
+      if (workspace.defaultProgramId) {
+        await deactivateProgram(workspace.defaultProgramId);
+      }
+    }
+
+    if (
+      updatedWorkspace.status === "fulfilled" &&
+      updatedWorkspace.value.users.length
+    ) {
+      const workspaceOwner = updatedWorkspace.value.users[0].user;
+      waitUntil(syncUserPlanToPlain(workspaceOwner));
     }
   } else if (workspace.paymentFailedAt) {
     await prisma.project.update({

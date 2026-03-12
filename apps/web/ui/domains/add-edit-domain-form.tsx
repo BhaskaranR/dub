@@ -30,12 +30,11 @@ import {
   TextCursorInput,
 } from "lucide-react";
 import { motion } from "motion/react";
-import posthog from "posthog-js";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { useDebouncedCallback } from "use-debounce";
-import { z } from "zod";
+import * as z from "zod/v4";
 import { QRCode } from "../shared/qr-code";
 
 const sanitizeJson = (string: string | null) => {
@@ -249,7 +248,6 @@ export function AddEditDomainForm({
           mutatePrefix("/api/links"),
         ]);
         const data = await res.json();
-        posthog.capture(props ? "domain_updated" : "domain_created", data);
         toast.success(endpoint.successMessage);
         onSuccess?.(data);
       } else {
@@ -276,7 +274,15 @@ export function AddEditDomainForm({
   const currentStatusProps = STATUS_CONFIG[domainStatus];
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit(onSubmit)}>
+    <form
+      ref={formRef}
+      onSubmit={async (e: FormEvent<HTMLFormElement>) => {
+        // prevent the submission event from propagating to the parent form (in the link builder)
+        e.preventDefault();
+        e.stopPropagation();
+        handleSubmit(onSubmit)(e);
+      }}
+    >
       <div
         className={cn(
           "flex flex-col gap-y-6 text-left",

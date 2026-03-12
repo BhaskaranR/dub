@@ -1,17 +1,18 @@
 import { convertCurrency } from "@/lib/analytics/convert-currency";
 import { isFirstConversion } from "@/lib/analytics/is-first-conversion";
+import { detectAndRecordFraudEvent } from "@/lib/api/fraud/detect-record-fraud-event";
 import { includeTags } from "@/lib/api/links/include-tags";
 import { syncPartnerLinksStats } from "@/lib/api/partners/sync-partner-links-stats";
 import { executeWorkflows } from "@/lib/api/workflows/execute-workflows";
 import { createPartnerCommission } from "@/lib/partners/create-partner-commission";
+import { sendPartnerPostback } from "@/lib/postback/api/send-partner-postback";
 import { getLeadEvent, recordSale } from "@/lib/tinybird";
-import { StripeMode, WebhookPartner } from "@/lib/types";
+import { StripeMode } from "@/lib/types";
 import { redis } from "@/lib/upstash";
 import { sendWorkspaceWebhook } from "@/lib/webhook/publish";
 import { transformSaleEventData } from "@/lib/webhook/transform";
 import { prisma } from "@dub/prisma";
-import { WorkflowTrigger } from "@dub/prisma/client";
-import { nanoid } from "@dub/utils";
+import { nanoid, pick } from "@dub/utils";
 import { waitUntil } from "@vercel/functions";
 import type Stripe from "stripe";
 import { getConnectedCustomer } from "./utils/get-connected-customer";
@@ -38,7 +39,9 @@ export async function invoicePaid(event: Stripe.Event, mode: StripeMode) {
       mode,
     });
 
-    const dubCustomerExternalId = connectedCustomer?.metadata.dubCustomerId; // TODO: need to update to dubCustomerExternalId in the future for consistency
+    const dubCustomerExternalId =
+      connectedCustomer?.metadata.dubCustomerExternalId ||
+      connectedCustomer?.metadata.dubCustomerId;
 
     if (dubCustomerExternalId) {
       try {
@@ -116,7 +119,7 @@ export async function invoicePaid(event: Stripe.Event, mode: StripeMode) {
 
   // Find lead
   const leadEvent = await getLeadEvent({ customerId: customer.id });
-  if (!leadEvent || leadEvent.data.length === 0) {
+  if (!leadEvent) {
     return `Lead event with customer ID ${customer.id} not found, skipping...`;
   }
 
@@ -128,8 +131,8 @@ export async function invoicePaid(event: Stripe.Event, mode: StripeMode) {
   );
 
   const saleData = {
-    ...leadEvent.data[0],
-    workspace_id: leadEvent.data[0].workspace_id || customer.projectId, // in case for some reason the lead event doesn't have workspace_id
+    ...leadEvent,
+    workspace_id: leadEvent.workspace_id || customer.projectId, // in case for some reason the lead event doesn't have workspace_id
     event_id: eventId,
     event_name: isOneTimePayment ? "Purchase" : "Invoice paid",
     payment_processor: "stripe",
@@ -141,7 +144,7 @@ export async function invoicePaid(event: Stripe.Event, mode: StripeMode) {
     }),
   };
 
-  const linkId = leadEvent.data[0].link_id;
+  const linkId = leadEvent.link_id;
   const link = await prisma.link.findUnique({
     where: {
       id: linkId,
@@ -205,14 +208,18 @@ export async function invoicePaid(event: Stripe.Event, mode: StripeMode) {
         saleAmount: {
           increment: invoiceSaleAmount,
         },
+        firstSaleAt: customer.firstSaleAt ? undefined : new Date(),
       },
     }),
   ]);
 
   // for program links
-  let webhookPartner: WebhookPartner | undefined;
+  let createdCommission:
+    | Awaited<ReturnType<typeof createPartnerCommission>>
+    | undefined = undefined;
+
   if (link.programId && link.partnerId) {
-    const createdCommission = await createPartnerCommission({
+    createdCommission = await createPartnerCommission({
       event: "sale",
       programId: link.programId,
       partnerId: link.partnerId,
@@ -226,6 +233,7 @@ export async function invoicePaid(event: Stripe.Event, mode: StripeMode) {
       context: {
         customer: {
           country: customer.country,
+          signupDate: customer.createdAt,
         },
         sale: {
           productId: invoice.lines.data[0]?.pricing?.price_details?.product,
@@ -233,44 +241,77 @@ export async function invoicePaid(event: Stripe.Event, mode: StripeMode) {
         },
       },
     });
-    webhookPartner = createdCommission?.webhookPartner;
+
+    const { webhookPartner, programEnrollment } = createdCommission;
 
     waitUntil(
       Promise.allSettled([
         executeWorkflows({
-          trigger: WorkflowTrigger.saleRecorded,
-          context: {
+          trigger: "partnerMetricsUpdated",
+          reason: "sale",
+          identity: {
+            workspaceId: workspace.id,
             programId: link.programId,
             partnerId: link.partnerId,
+          },
+          metrics: {
             current: {
               saleAmount: saleData.amount,
               conversions: firstConversionFlag ? 1 : 0,
             },
           },
         }),
+
         syncPartnerLinksStats({
           partnerId: link.partnerId,
           programId: link.programId,
           eventType: "sale",
         }),
+
+        webhookPartner &&
+          detectAndRecordFraudEvent({
+            program: { id: link.programId },
+            partner: pick(webhookPartner, ["id", "email", "name"]),
+            programEnrollment: pick(programEnrollment, ["status"]),
+            customer: pick(customer, ["id", "email", "name"]),
+            link: pick(link, ["id"]),
+            click: pick(saleData, ["url", "referer"]),
+            event: { id: saleData.event_id },
+          }),
       ]),
     );
   }
 
-  // send workspace webhook
   waitUntil(
-    sendWorkspaceWebhook({
-      trigger: "sale.created",
-      workspace,
-      data: transformSaleEventData({
-        ...saleData,
-        clickedAt: customer.clickedAt || customer.createdAt,
-        link: linkUpdated,
-        customer,
-        partner: webhookPartner,
-        metadata: null,
+    Promise.allSettled([
+      sendWorkspaceWebhook({
+        trigger: "sale.created",
+        workspace,
+        data: transformSaleEventData({
+          ...saleData,
+          clickedAt: customer.clickedAt || customer.createdAt,
+          link: linkUpdated,
+          customer,
+          partner: createdCommission?.webhookPartner,
+          metadata: null,
+        }),
       }),
-    }),
+
+      ...(link?.partnerId
+        ? [
+            sendPartnerPostback({
+              partnerId: link.partnerId,
+              event: "sale.created",
+              data: {
+                ...saleData,
+                clickedAt: customer.clickedAt || customer.createdAt,
+                link: linkUpdated,
+                customer,
+              },
+            }),
+          ]
+        : []),
+    ]),
   );
 
   return `Sale recorded for customer ID ${customer.id} and invoice ID ${invoiceId}`;

@@ -88,6 +88,7 @@ const eventColumns = {
       "refererUrl",
       "ip",
       "clickId",
+      "eventId",
       "metadata",
     ],
     defaultVisible: ["timestamp", "event", "link", "customer", "referer"],
@@ -114,6 +115,7 @@ const eventColumns = {
       "refererUrl",
       "ip",
       "clickId",
+      "eventId",
       "metadata",
     ],
     defaultVisible: [
@@ -330,8 +332,7 @@ export default function EventsTable({
           maxSize: 400,
           meta: {
             filterParams: ({ getValue }) => ({
-              domain: getValue().domain,
-              key: getValue().key,
+              linkId: getValue().id,
             }),
           },
           cell: ({ getValue }) => {
@@ -393,7 +394,7 @@ export default function EventsTable({
         },
         {
           id: "referer",
-          header: "Referer",
+          header: "Referrer",
           accessorKey: "click.referer",
           meta: {
             filterParams: ({ getValue }) => ({ referer: getValue() }),
@@ -612,12 +613,17 @@ export default function EventsTable({
                 id: "invoiceId",
                 header: "Invoice ID",
                 accessorKey: "sale.invoiceId",
-                maxSize: 200,
+                minSize: 200,
                 cell: ({ getValue }) =>
                   getValue() ? (
-                    <span className="truncate" title={getValue()}>
-                      {getValue()}
-                    </span>
+                    <CopyText
+                      value={getValue()}
+                      successMessage="Copied invoice ID to clipboard!"
+                    >
+                      <span className="truncate font-mono" title={getValue()}>
+                        {getValue()}
+                      </span>
+                    </CopyText>
                   ) : (
                     <span className="text-neutral-400">-</span>
                   ),
@@ -633,6 +639,26 @@ export default function EventsTable({
                     <CopyText
                       value={getValue()}
                       successMessage="Copied click ID to clipboard!"
+                    >
+                      <span className="truncate font-mono" title={getValue()}>
+                        {getValue()}
+                      </span>
+                    </CopyText>
+                  ) : (
+                    <span className="text-neutral-400">-</span>
+                  ),
+              },
+              // Event ID
+              {
+                id: "eventId",
+                header: "Event ID",
+                accessorKey: "eventId",
+                maxSize: 200,
+                cell: ({ getValue }) =>
+                  getValue() ? (
+                    <CopyText
+                      value={getValue()}
+                      successMessage="Copied event ID to clipboard!"
                     >
                       <span className="truncate font-mono" title={getValue()}>
                         {getValue()}
@@ -665,9 +691,6 @@ export default function EventsTable({
         {
           id: "menu",
           enableHiding: false,
-          minSize: 43,
-          size: 43,
-          maxSize: 43,
           header: ({ table }) => <EditColumnsButton table={table} />,
           cell: ({ row }) => <RowMenuButton row={row} />,
         },

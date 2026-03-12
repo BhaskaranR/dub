@@ -14,7 +14,7 @@ import { PenWriting, Trash } from "@dub/ui/icons";
 import { Command } from "cmdk";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useBountySheet } from "./add-edit-bounty-sheet";
+import { useBountySheet } from "./add-edit-bounty/add-edit-bounty-sheet";
 
 interface BountyActionButtonProps {
   bounty: BountyProps;
@@ -34,6 +34,7 @@ export function BountyActionButton({
   const { submissionsCount } = useBountySubmissionsCount<
     SubmissionsCountByStatus[]
   >({
+    ignoreParams: true,
     enabled: Boolean(bounty),
   });
   const totalSubmissions = useMemo(() => {

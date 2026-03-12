@@ -1,11 +1,14 @@
 import { getStartEndDates } from "@/lib/analytics/utils/get-start-end-dates";
 import { getCommissionsQuerySchema } from "@/lib/zod/schemas/commissions";
 import { prisma } from "@dub/prisma";
-import { z } from "zod";
+import { CommissionStatus, FraudEventStatus } from "@dub/prisma/client";
+import * as z from "zod/v4";
+import { DubApiError } from "../errors";
+import { buildPaginationQuery } from "../pagination";
 
 type CommissionsFilters = z.infer<typeof getCommissionsQuerySchema> & {
   programId: string;
-  includeProgramEnrollment?: boolean; // Decide if we want to fetch the program enrollment data for the partner
+  isHoldStatus?: boolean;
 };
 
 export async function getCommissions(filters: CommissionsFilters) {
@@ -22,12 +25,34 @@ export async function getCommissions(filters: CommissionsFilters) {
     end,
     interval,
     timezone,
-    page,
-    pageSize,
-    sortBy,
-    sortOrder,
-    includeProgramEnrollment = false,
+    isHoldStatus,
+    startingAfter,
+    endingBefore,
   } = filters;
+
+  const paginationQuery = buildPaginationQuery(filters);
+
+  // Validate the provided cursor ID
+  const cursorId = startingAfter || endingBefore;
+
+  if (cursorId) {
+    const commission = await prisma.commission.findUnique({
+      where: {
+        id: cursorId,
+      },
+      select: {
+        id: true,
+        programId: true,
+      },
+    });
+
+    if (!commission || commission.programId !== programId) {
+      throw new DubApiError({
+        code: "unprocessable_entity",
+        message: "Invalid cursor: the provided ID does not exist.",
+      });
+    }
+  }
 
   const { startDate, endDate } = getStartEndDates({
     interval,
@@ -35,6 +60,27 @@ export async function getCommissions(filters: CommissionsFilters) {
     end,
     timezone,
   });
+
+  const statusFilter = isHoldStatus
+    ? { in: [CommissionStatus.pending, CommissionStatus.processed] }
+    : status ?? {
+        notIn: [
+          CommissionStatus.duplicate,
+          CommissionStatus.fraud,
+          CommissionStatus.canceled,
+        ],
+      };
+
+  const programEnrollmentFilter = {
+    ...(groupId && { groupId }),
+    ...(isHoldStatus && {
+      fraudEventGroups: {
+        some: {
+          status: FraudEventStatus.pending,
+        },
+      },
+    }),
+  };
 
   return await prisma.commission.findMany({
     where: invoiceId
@@ -48,45 +94,23 @@ export async function getCommissions(filters: CommissionsFilters) {
           },
           programId,
           partnerId,
-          status,
+          status: statusFilter,
           type,
           customerId,
           payoutId,
           createdAt: {
-            gte: startDate.toISOString(),
-            lte: endDate.toISOString(),
+            gte: startDate,
+            lte: endDate,
           },
-          ...(groupId && {
-            partner: {
-              programs: {
-                some: {
-                  programId,
-                  groupId,
-                },
-              },
-            },
+          ...(Object.keys(programEnrollmentFilter).length > 0 && {
+            programEnrollment: programEnrollmentFilter,
           }),
         },
     include: {
       customer: true,
-      ...(!includeProgramEnrollment
-        ? {
-            partner: true,
-          }
-        : {
-            partner: {
-              include: {
-                programs: {
-                  where: {
-                    programId,
-                  },
-                },
-              },
-            },
-          }),
+      partner: true,
+      programEnrollment: true,
     },
-    skip: (page - 1) * pageSize,
-    take: pageSize,
-    orderBy: { [sortBy]: sortOrder },
+    ...paginationQuery,
   });
 }

@@ -1,4 +1,5 @@
 import { getStartEndDates } from "@/lib/analytics/utils/get-start-end-dates";
+import { obfuscateCustomerEmail } from "@/lib/api/partner-profile/obfuscate-customer-email";
 import { getProgramEnrollmentOrThrow } from "@/lib/api/programs/get-program-enrollment-or-throw";
 import { withPartnerProfile } from "@/lib/auth/partner";
 import { generateRandomName } from "@/lib/names";
@@ -46,8 +47,8 @@ export const GET = withPartnerProfile(
       partnerId: partner.id,
       ...(payoutId && { payoutId }),
       createdAt: {
-        gte: startDate.toISOString(),
-        lte: endDate.toISOString(),
+        gte: startDate,
+        lte: endDate,
       },
     };
 
@@ -105,7 +106,7 @@ export const GET = withPartnerProfile(
             email: customer?.email
               ? customerDataSharingEnabledAt
                 ? customer.email
-                : customer.email.replace(/(?<=^.).+(?=.@)/, "****")
+                : obfuscateCustomerEmail(customer.email)
               : customer?.name || generateRandomName(),
             _count,
           };

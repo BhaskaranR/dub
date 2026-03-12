@@ -1,4 +1,3 @@
-import { PartnerProps } from "@/lib/types";
 import {
   Button,
   ChevronUp,
@@ -13,9 +12,7 @@ import Link from "next/link";
 import { HTMLProps, useState } from "react";
 import { usePartnerDiscoveryRequirements } from "./use-partner-discovery-requirements";
 
-export function ProfileDiscoveryGuide({ partner }: { partner: PartnerProps }) {
-  if (partner.discoverableAt) return null;
-
+export function ProfileDiscoveryGuide() {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const tasks = usePartnerDiscoveryRequirements();
@@ -65,10 +62,10 @@ export function ProfileDiscoveryGuide({ partner }: { partner: PartnerProps }) {
             />
           </div>
           <div>
-            <h2 className="text-lg font-semibold">Get discovered</h2>
+            <h2 className="text-lg font-semibold">Complete your profile</h2>
             <p className="text-content-inverted/60 text-base">
-              Finish these steps to show up in the Partner Network and get
-              invited to more programs.
+              Finish these steps to improve your application approval rates and
+              receive more invitations from programs in our network.
             </p>
           </div>
         </div>

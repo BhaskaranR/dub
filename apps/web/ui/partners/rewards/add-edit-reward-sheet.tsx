@@ -14,7 +14,9 @@ import { RewardConditionsArray, RewardProps } from "@/lib/types";
 import { RECURRING_MAX_DURATIONS } from "@/lib/zod/schemas/misc";
 import {
   createOrUpdateRewardSchema,
-  ENTITY_ATTRIBUTE_TYPES,
+  REWARD_CONDITION_ATTRIBUTES,
+  REWARD_DESCRIPTION_MAX_LENGTH,
+  REWARD_TOOLTIP_DESCRIPTION_MAX_LENGTH,
   rewardConditionsArraySchema,
   rewardConditionSchema,
   rewardConditionsSchema,
@@ -24,13 +26,16 @@ import { EventType, RewardStructure } from "@dub/prisma/client";
 import {
   Button,
   Gift,
+  Grid,
   MoneyBills2,
   Pen2,
   Sheet,
   Tooltip,
   TooltipContent,
+  useLocalStorage,
   useRouterStuff,
 } from "@dub/ui";
+import { CursorRays, InvoiceDollar, UserPlus } from "@dub/ui/icons";
 import { capitalize, cn, pluralize } from "@dub/utils";
 import { motion } from "motion/react";
 import { useAction } from "next-safe-action/hooks";
@@ -47,15 +52,18 @@ import {
 import { FormProvider, useForm, useFormContext } from "react-hook-form";
 import { toast } from "sonner";
 import { mutate } from "swr";
-import { z } from "zod";
+import { v4 as uuid } from "uuid";
+import * as z from "zod/v4";
 import {
   InlineBadgePopover,
   InlineBadgePopoverContext,
   InlineBadgePopoverInput,
   InlineBadgePopoverMenu,
+  InlineBadgePopoverRichTextArea,
 } from "../../shared/inline-badge-popover";
 import { RewardDiscountPartnersCard } from "../groups/reward-discount-partners-card";
 import { RewardIconSquare } from "./reward-icon-square";
+import { RewardPreviewCard } from "./reward-preview-card";
 import { REWARD_TYPES, RewardsLogic } from "./rewards-logic";
 
 interface RewardSheetProps {
@@ -79,6 +87,65 @@ const formSchema = createOrUpdateRewardSchema.extend({
 type FormData = z.infer<typeof formSchema>;
 
 export const useAddEditRewardForm = () => useFormContext<FormData>();
+
+export const getRewardPayload = ({ data }: { data: FormData }) => {
+  let modifiers: RewardConditionsArray | null = null;
+
+  if (data.modifiers?.length) {
+    modifiers = rewardConditionsArraySchema.parse(
+      data.modifiers.map((m) => {
+        const type = m.type === undefined ? data.type : m.type;
+        const maxDuration =
+          m.maxDuration === undefined ? data.maxDuration : m.maxDuration;
+
+        return {
+          ...m,
+          id: m.id ?? uuid(),
+          conditions: m.conditions.map((c) => ({
+            ...c,
+            value:
+              c.entity &&
+              c.attribute &&
+              REWARD_CONDITION_ATTRIBUTES.find((a) => a.id === c.attribute)
+                ?.type === "currency"
+                ? c.value === "" ||
+                  c.value == null ||
+                  Number.isNaN(Number(c.value))
+                  ? c.value
+                  : Math.round(Number(c.value) * 100)
+                : c.value,
+          })),
+          amountInCents:
+            type === "flat" && m.amountInCents !== undefined
+              ? Math.round(m.amountInCents * 100)
+              : undefined,
+          amountInPercentage:
+            type === "percentage" ? m.amountInPercentage : undefined,
+          maxDuration: maxDuration === Infinity ? null : maxDuration,
+        };
+      }),
+    );
+  }
+
+  const amount =
+    data.type === "flat"
+      ? {
+          amountInCents: Math.round((data.amountInCents ?? 0) * 100),
+          amountInPercentage: undefined,
+        }
+      : {
+          amountInCents: undefined,
+          amountInPercentage: data.amountInPercentage,
+        };
+
+  return {
+    ...data,
+    ...amount,
+    maxDuration:
+      Infinity === Number(data.maxDuration) ? null : data.maxDuration,
+    modifiers,
+  };
+};
 
 function RewardSheetContent({
   setIsOpen,
@@ -118,6 +185,7 @@ function RewardSheetContent({
           ? defaultValuesSource.amountInPercentage
           : undefined,
       description: defaultValuesSource?.description ?? null,
+      tooltipDescription: defaultValuesSource?.tooltipDescription ?? null,
       modifiers: defaultValuesSource?.modifiers?.map((m) => {
         const maxDuration =
           m.maxDuration === undefined
@@ -129,7 +197,8 @@ function RewardSheetContent({
           conditions: m.conditions.map((c) => ({
             ...c,
             value:
-              ENTITY_ATTRIBUTE_TYPES[c.entity]?.[c.attribute] === "currency" &&
+              REWARD_CONDITION_ATTRIBUTES.find((a) => a.id === c.attribute)
+                ?.type === "currency" &&
               c.value !== "" &&
               c.value != null &&
               !Number.isNaN(Number(c.value))
@@ -156,6 +225,7 @@ function RewardSheetContent({
     type,
     maxDuration,
     description,
+    tooltipDescription,
     modifiers,
   ] = watch([
     "event",
@@ -164,6 +234,7 @@ function RewardSheetContent({
     "type",
     "maxDuration",
     "description",
+    "tooltipDescription",
     "modifiers",
   ]);
 
@@ -233,70 +304,24 @@ function RewardSheetContent({
       return;
     }
 
-    let modifiers: RewardConditionsArray | null = null;
+    let payload: ReturnType<typeof getRewardPayload> | null = null;
 
-    if (data.modifiers?.length) {
-      try {
-        modifiers = rewardConditionsArraySchema.parse(
-          data.modifiers.map((m) => {
-            const type = m.type === undefined ? data.type : m.type;
-            const maxDuration =
-              m.maxDuration === undefined ? data.maxDuration : m.maxDuration;
+    try {
+      payload = {
+        ...getRewardPayload({
+          data,
+        }),
+        workspaceId,
+      };
+    } catch (error) {
+      console.log("parse error", error);
+      setError("root.logic", { message: "Invalid reward condition" });
+      toast.error(
+        "Invalid reward condition. Please fix the errors and try again.",
+      );
 
-            return {
-              ...m,
-              conditions: m.conditions.map((c) => ({
-                ...c,
-                value:
-                  c.entity &&
-                  c.attribute &&
-                  ENTITY_ATTRIBUTE_TYPES[c.entity]?.[c.attribute] === "currency"
-                    ? c.value === "" ||
-                      c.value == null ||
-                      Number.isNaN(Number(c.value))
-                      ? c.value
-                      : Math.round(Number(c.value) * 100)
-                    : c.value,
-              })),
-              amountInCents:
-                type === "flat" && m.amountInCents !== undefined
-                  ? Math.round(m.amountInCents * 100)
-                  : undefined,
-              amountInPercentage:
-                type === "percentage" ? m.amountInPercentage : undefined,
-              maxDuration: maxDuration === Infinity ? null : maxDuration,
-            };
-          }),
-        );
-      } catch (error) {
-        console.log("parse error", error);
-        setError("root.logic", { message: "Invalid reward condition" });
-        toast.error(
-          "Invalid reward condition. Please fix the errors and try again.",
-        );
-        return;
-      }
+      return;
     }
-
-    const amount =
-      type === "flat"
-        ? {
-            amountInCents: Math.round((data.amountInCents ?? 0) * 100),
-            amountInPercentage: undefined,
-          }
-        : {
-            amountInCents: undefined,
-            amountInPercentage: data.amountInPercentage,
-          };
-
-    const payload = {
-      ...data,
-      ...amount,
-      workspaceId,
-      maxDuration:
-        Infinity === Number(data.maxDuration) ? null : data.maxDuration,
-      modifiers,
-    };
 
     if (!reward) {
       await createReward({
@@ -347,6 +372,7 @@ function RewardSheetContent({
         </div>
 
         <div className="flex flex-1 flex-col overflow-y-auto p-6">
+          {!reward && <RewardHelperBlock event={event} />}
           <RewardSheetCard
             title={
               <div className="w-full">
@@ -429,6 +455,9 @@ function RewardSheetContent({
                           </InlineBadgePopover>
                         </>
                       )}
+                      {modifiers?.length ? (
+                        <> for all other {selectedEvent}s</>
+                      ) : null}
                     </span>
                   </div>
                   <Tooltip
@@ -466,7 +495,7 @@ function RewardSheetContent({
                   <div className="pt-2.5">
                     <div className="border-border-subtle flex min-w-0 items-center gap-2.5 border-t px-2.5 pt-2.5">
                       <RewardIconSquare icon={Gift} />
-                      <span className="grow leading-relaxed">
+                      <span className="min-w-0 grow leading-relaxed">
                         Shown as{" "}
                         <InlineBadgePopover
                           text={description || "Reward description"}
@@ -484,7 +513,25 @@ function RewardSheetContent({
                               )
                             }
                             className="sm:w-80"
-                            maxLength={100}
+                            maxLength={REWARD_DESCRIPTION_MAX_LENGTH}
+                          />
+                        </InlineBadgePopover>{" "}
+                        with the tooltip{" "}
+                        <InlineBadgePopover
+                          text={tooltipDescription || "Reward tooltip"}
+                          showOptional={!tooltipDescription}
+                          buttonClassName="min-w-0 max-w-full"
+                          contentClassName="truncate"
+                        >
+                          <InlineBadgePopoverRichTextArea
+                            value={tooltipDescription ?? ""}
+                            onChange={(value) =>
+                              setValue("tooltipDescription", value, {
+                                shouldDirty: true,
+                              })
+                            }
+                            className="sm:w-80"
+                            maxLength={REWARD_TOOLTIP_DESCRIPTION_MAX_LENGTH}
                           />
                         </InlineBadgePopover>
                       </span>
@@ -492,25 +539,30 @@ function RewardSheetContent({
                         variant="outline"
                         className="size-6 shrink-0 p-0"
                         icon={<X className="size-3" strokeWidth={2} />}
-                        onClick={() =>
-                          setValue("description", null, { shouldDirty: true })
-                        }
+                        onClick={() => {
+                          setValue("description", null, { shouldDirty: true });
+                          setValue("tooltipDescription", null, {
+                            shouldDirty: true,
+                          });
+                        }}
                       />
                     </div>
                   </div>
                 </motion.div>
               </div>
             }
-            content={
-              selectedEvent === "click" ? undefined : (
-                <RewardsLogic isDefaultReward={false} />
-              )
-            }
+            content={<RewardsLogic isDefaultReward={false} />}
           />
 
           <VerticalLine />
+          <RewardPreviewCard />
 
-          {group && <RewardDiscountPartnersCard groupId={group.id} />}
+          {group && (
+            <>
+              <VerticalLine />
+              <RewardDiscountPartnersCard groupId={group.id} />
+            </>
+          )}
         </div>
 
         <div className="flex items-center justify-between border-t border-neutral-200 p-5">
@@ -520,6 +572,7 @@ function RewardSheetContent({
                 type="button"
                 variant="outline"
                 text="Remove reward"
+                className="h-9 w-fit"
                 onClick={onDelete}
                 loading={isDeleting}
                 disabled={isCreating || isUpdating}
@@ -533,7 +586,7 @@ function RewardSheetContent({
               variant="secondary"
               onClick={() => setIsOpen(false)}
               text="Cancel"
-              className="w-fit"
+              className="h-9 w-fit"
               disabled={isCreating || isUpdating || isDeleting}
             />
 
@@ -541,7 +594,7 @@ function RewardSheetContent({
               type="submit"
               variant="primary"
               text={reward ? "Update reward" : "Create reward"}
-              className="w-fit"
+              className="h-9 w-fit"
               loading={isCreating || isUpdating}
               disabled={
                 amount == null || isDeleting || isCreating || isUpdating
@@ -549,9 +602,9 @@ function RewardSheetContent({
               disabledTooltip={
                 showAdvancedUpsell ? (
                   <TooltipContent
-                    title="Advanced reward structures are only available on the Advanced plan and above."
+                    title="[Advanced reward structures](https://dub.co/help/article/partner-rewards#adding-reward-conditions) are only available on the Advanced plan and above."
                     cta="Upgrade to Advanced"
-                    href={`/${workspaceSlug}/upgrade?plan=advanced`}
+                    href={`/${workspaceSlug}/upgrade?showPartnersUpgradeModal=true`}
                     target="_blank"
                   />
                 ) : undefined
@@ -561,6 +614,87 @@ function RewardSheetContent({
         </div>
       </form>
     </FormProvider>
+  );
+}
+
+const REWARD_HELPER_CONTENT: Record<
+  EventType,
+  {
+    icon: typeof InvoiceDollar;
+    title: string;
+    description: string;
+  }
+> = {
+  sale: {
+    icon: InvoiceDollar,
+    title: "Sale rewards",
+    description:
+      "Reward when revenue is generated. Best for partners, creators, and long term partnerships.",
+  },
+  lead: {
+    icon: UserPlus,
+    title: "Lead rewards",
+    description:
+      "Reward for sign ups or demos. Best for B2B, demos, waitlists, or longer sales cycles.",
+  },
+  click: {
+    icon: CursorRays,
+    title: "Click rewards",
+    description:
+      "Reward for traffic and reach. Best for publishers and trusted partners only.",
+  },
+};
+
+function RewardHelperBlock({ event }: { event: EventType }) {
+  const [dismissed, setDismissed] = useLocalStorage<boolean>(
+    `reward-helper-${event}-dismissed`,
+    false,
+  );
+
+  const content = REWARD_HELPER_CONTENT[event];
+  const Icon = content.icon;
+
+  return (
+    <motion.div
+      animate={
+        dismissed
+          ? { opacity: 0, height: 0, marginBottom: 0 }
+          : { opacity: 1, height: "auto", marginBottom: 16 }
+      }
+      initial={false}
+      className="overflow-hidden"
+      inert={dismissed}
+    >
+      <div className="relative overflow-hidden rounded-xl bg-neutral-100 p-4">
+        <div className="absolute right-0 top-0 flex h-full w-1/2 items-start justify-end opacity-30 mix-blend-hard-light blur-[50px] [mask-image:linear-gradient(90deg,transparent,black)] [transform:translateZ(0)]">
+          <div className="h-32 w-80 -translate-y-4 translate-x-4 bg-[conic-gradient(from_220deg_at_50%_50%,#FF0000_0%,#EAB308_17%,#1E00FF_31%,#5CFF80_46%,#855AFC_60%,#3A8BFD_78%,#FF0000_100%)]" />
+        </div>
+        <Grid
+          cellSize={60}
+          patternOffset={[33, 28]}
+          className="inset-[unset] right-0 top-0 h-full w-1/2 text-neutral-300 [mask-image:linear-gradient(90deg,transparent,black)]"
+        />
+
+        <div className="relative flex flex-col gap-2">
+          <Icon className="size-5 text-neutral-600" />
+          <div className="flex flex-col pt-2">
+            <span className="text-sm font-medium text-neutral-900">
+              {content.title}
+            </span>
+            <span className="text-sm text-neutral-500">
+              {content.description}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            text="Dismiss"
+            className="mt-1 h-8 w-fit px-3"
+            onClick={() => setDismissed(true)}
+          />
+        </div>
+      </div>
+    </motion.div>
   );
 }
 

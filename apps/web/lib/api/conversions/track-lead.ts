@@ -1,12 +1,14 @@
 import { createId } from "@/lib/api/create-id";
 import { DubApiError } from "@/lib/api/errors";
+import { detectAndRecordFraudEvent } from "@/lib/api/fraud/detect-record-fraud-event";
 import { includeTags } from "@/lib/api/links/include-tags";
 import { generateRandomName } from "@/lib/names";
 import { createPartnerCommission } from "@/lib/partners/create-partner-commission";
+import { sendPartnerPostback } from "@/lib/postback/api/send-partner-postback";
 import { isStored, storage } from "@/lib/storage";
 import { getClickEvent, recordLead } from "@/lib/tinybird";
 import { logConversionEvent } from "@/lib/tinybird/log-conversion-events";
-import { WebhookPartner, WorkspaceProps } from "@/lib/types";
+import { CustomerSource, WorkspaceProps } from "@/lib/types";
 import { redis } from "@/lib/upstash";
 import { sendWorkspaceWebhook } from "@/lib/webhook/publish";
 import { transformLeadEventData } from "@/lib/webhook/transform";
@@ -15,16 +17,17 @@ import {
   trackLeadResponseSchema,
 } from "@/lib/zod/schemas/leads";
 import { prisma } from "@dub/prisma";
-import { Link, WorkflowTrigger } from "@dub/prisma/client";
-import { nanoid, R2_URL } from "@dub/utils";
+import { Link } from "@dub/prisma/client";
+import { nanoid, pick, R2_URL } from "@dub/utils";
 import { waitUntil } from "@vercel/functions";
-import { z } from "zod";
+import * as z from "zod/v4";
 import { syncPartnerLinksStats } from "../partners/sync-partner-links-stats";
 import { executeWorkflows } from "../workflows/execute-workflows";
 
 type TrackLeadParams = z.input<typeof trackLeadRequestSchema> & {
   rawBody: any;
   workspace: Pick<WorkspaceProps, "id" | "stripeConnectId" | "webhookEnabled">;
+  source?: CustomerSource; // default is "tracked"
 };
 
 export const trackLead = async ({
@@ -39,6 +42,7 @@ export const trackLead = async ({
   metadata,
   rawBody,
   workspace,
+  source = "tracked",
 }: TrackLeadParams) => {
   // try to find the customer to use if it exists
   let customer = await prisma.customer.findUnique({
@@ -184,7 +188,9 @@ export const trackLead = async ({
           projectId: workspace.id,
           projectConnectId: workspace.stripeConnectId,
           clickId: clickData.click_id,
-          linkId: clickData.link_id,
+          linkId: link.id,
+          programId: link.programId,
+          partnerId: link.partnerId,
           country: clickData.country,
           clickedAt: new Date(clickData.timestamp + "Z"),
         },
@@ -226,7 +232,7 @@ export const trackLead = async ({
         // track the conversion event in our logs
         await logConversionEvent({
           workspace_id: workspace.id,
-          link_id: clickData.link_id,
+          link_id: link.id,
           path: "/track/lead",
           body: JSON.stringify(rawBody),
         });
@@ -237,14 +243,25 @@ export const trackLead = async ({
           finalCustomerAvatar
         ) {
           // persist customer avatar to R2
-          await storage.upload({
-            key: finalCustomerAvatar.replace(`${R2_URL}/`, ""),
-            body: customerAvatar,
-            opts: {
-              width: 128,
-              height: 128,
-            },
-          });
+          await storage
+            .upload({
+              key: finalCustomerAvatar.replace(`${R2_URL}/`, ""),
+              body: customerAvatar,
+              opts: {
+                width: 128,
+                height: 128,
+              },
+            })
+            .catch(async (error) => {
+              console.error("Error persisting customer avatar to R2", error);
+              // if the avatar fails to upload to R2, set the avatar to null in the database
+              if (customer) {
+                await prisma.customer.update({
+                  where: { id: customer.id },
+                  data: { avatar: null },
+                });
+              }
+            });
         }
 
         // if not deferred mode, process the following right away:
@@ -257,7 +274,7 @@ export const trackLead = async ({
             // update link leads count
             prisma.link.update({
               where: {
-                id: clickData.link_id,
+                id: link.id,
               },
               data: {
                 leads: {
@@ -282,10 +299,12 @@ export const trackLead = async ({
           ]);
           link = updatedLink; // update the link variable to the latest version
 
-          let webhookPartner: WebhookPartner | undefined;
+          let createdCommission:
+            | Awaited<ReturnType<typeof createPartnerCommission>>
+            | undefined = undefined;
 
           if (link.programId && link.partnerId && customer) {
-            const createdCommission = await createPartnerCommission({
+            createdCommission = await createPartnerCommission({
               event: "lead",
               programId: link.programId,
               partnerId: link.partnerId,
@@ -296,42 +315,80 @@ export const trackLead = async ({
               context: {
                 customer: {
                   country: customer.country,
+                  source,
                 },
               },
             });
-            webhookPartner = createdCommission?.webhookPartner;
+
+            const { commission, webhookPartner, programEnrollment } =
+              createdCommission;
 
             await Promise.allSettled([
               executeWorkflows({
-                trigger: WorkflowTrigger.leadRecorded,
-                context: {
+                trigger: "partnerMetricsUpdated",
+                reason: "lead",
+                identity: {
+                  workspaceId: workspace.id,
                   programId: link.programId,
                   partnerId: link.partnerId,
+                },
+                metrics: {
                   current: {
                     leads: 1,
                   },
                 },
               }),
+
               syncPartnerLinksStats({
                 partnerId: link.partnerId,
                 programId: link.programId,
                 eventType: "lead",
               }),
+
+              // only run fraud checks if the commission was created
+              commission &&
+                webhookPartner &&
+                detectAndRecordFraudEvent({
+                  program: { id: link.programId },
+                  partner: pick(webhookPartner, ["id", "email", "name"]),
+                  programEnrollment: pick(programEnrollment, ["status"]),
+                  customer: pick(customer, ["id", "email", "name"]),
+                  link: pick(link, ["id"]),
+                  click: pick(clickData, ["url", "referer"]),
+                  event: { id: leadEventId },
+                }),
             ]);
           }
 
-          await sendWorkspaceWebhook({
-            trigger: "lead.created",
-            data: transformLeadEventData({
-              ...clickData,
-              eventName,
-              link,
-              customer,
-              partner: webhookPartner,
-              metadata,
+          await Promise.allSettled([
+            sendWorkspaceWebhook({
+              trigger: "lead.created",
+              data: transformLeadEventData({
+                ...clickData,
+                eventName,
+                link,
+                customer,
+                partner: createdCommission?.webhookPartner,
+                metadata,
+              }),
+              workspace,
             }),
-            workspace,
-          });
+
+            ...(link.partnerId
+              ? [
+                  sendPartnerPostback({
+                    partnerId: link.partnerId,
+                    event: "lead.created",
+                    data: {
+                      ...clickData,
+                      eventName,
+                      link,
+                      customer,
+                    },
+                  }),
+                ]
+              : []),
+          ]);
         }
       })(),
     );

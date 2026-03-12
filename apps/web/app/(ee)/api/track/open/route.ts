@@ -4,12 +4,12 @@ import { linkCache } from "@/lib/api/links/cache";
 import { recordClickCache } from "@/lib/api/links/record-click-cache";
 import { parseRequestBody } from "@/lib/api/utils";
 import { withAxiom } from "@/lib/axiom/server";
-import { getIdentityHash } from "@/lib/middleware/utils";
 import { DeepLinkClickData } from "@/lib/middleware/utils/cache-deeplink-click-data";
+import { getIdentityHash } from "@/lib/middleware/utils/get-identity-hash";
 import { getLinkViaEdge } from "@/lib/planetscale";
 import { recordClick } from "@/lib/tinybird";
 import { RedisLinkProps } from "@/lib/types";
-import { formatRedisLink, redis } from "@/lib/upstash";
+import { formatRedisLink, redis, redisGlobalWithTimeout } from "@/lib/upstash";
 import {
   trackOpenRequestSchema,
   trackOpenResponseSchema,
@@ -29,11 +29,12 @@ export const POST = withAxiom(async (req) => {
     const identityHash = await getIdentityHash(req);
 
     if (!deepLinkUrl) {
+      // Probabilistic IP-based tracking
       if (ip) {
         // if ip address is present, check if there's a cached click
         console.log(`Checking cache for ${ip}:${dubDomain}:*`);
 
-        // Get all iOS click cache keys for this identity hash
+        // Get all iOS click cache keys for this IP address
         const [_, cacheKeysForDomain] = await redis.scan(0, {
           match: `deepLinkClickCache:${ip}:${dubDomain}:*`,
           count: 10,
@@ -69,11 +70,13 @@ export const POST = withAxiom(async (req) => {
     const domain = deepLink.hostname.replace(/^www\./, "").toLowerCase();
     const key = deepLink.pathname.slice(1) || "_root"; // Remove leading slash, default to _root if empty
 
-    let [cachedClickId, cachedLink] = await redis.mget<
-      [string, RedisLinkProps, string[]]
-    >([
-      recordClickCache._createKey({ domain, key, identityHash }),
-      linkCache._createKey({ domain, key }),
+    let [cachedClickId, cachedLink] = await Promise.all([
+      redisGlobalWithTimeout
+        .get<string>(recordClickCache._createKey({ domain, key, identityHash }))
+        .catch(() => null),
+      redisGlobalWithTimeout
+        .get<RedisLinkProps>(linkCache._createKey({ domain, key }))
+        .catch(() => null),
     ]);
 
     // assign a new clickId if there's no cached clickId
@@ -105,9 +108,16 @@ export const POST = withAxiom(async (req) => {
       });
     }
 
+    const linkData = {
+      id: cachedLink.id,
+      domain,
+      key,
+      url: cachedLink.url,
+    };
+
     // if there's no cached clickId, track the click event
     if (!cachedClickId) {
-      await recordClick({
+      const clickData = await recordClick({
         req,
         clickId,
         workspaceId: cachedLink.projectId,
@@ -121,16 +131,22 @@ export const POST = withAxiom(async (req) => {
         shouldCacheClickId: true,
         trigger: "deeplink",
       });
+
+      // return early with clickId = null if no click data was recorded (bot detected)
+      if (!clickData) {
+        return NextResponse.json(
+          trackOpenResponseSchema.parse({
+            clickId: null,
+            link: linkData,
+          }),
+          { headers: COMMON_CORS_HEADERS },
+        );
+      }
     }
 
     const response = trackOpenResponseSchema.parse({
       clickId,
-      link: {
-        id: cachedLink.id,
-        domain,
-        key,
-        url: cachedLink.url,
-      },
+      link: linkData,
     });
 
     return NextResponse.json(response, { headers: COMMON_CORS_HEADERS });

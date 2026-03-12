@@ -14,6 +14,8 @@ export * from "./dub-links";
 export * from "./dub-partners";
 export * from "./dub-product-icon";
 export * from "./expanding-arrow";
+export * from "./file-pen";
+export * from "./file-send";
 export * from "./ios-app-store";
 export * from "./lock-small";
 export * from "./magic";
@@ -23,6 +25,7 @@ export * from "./photo";
 export * from "./sort-order";
 export * from "./success";
 export * from "./tick";
+export * from "./user-clock";
 
 // loaders
 export * from "./loading-circle";
@@ -31,6 +34,7 @@ export * from "./loading-spinner";
 
 // brand logos
 export * from "./anthropic";
+export * from "./bing";
 export * from "./facebook";
 export * from "./github";
 export * from "./google";
@@ -38,6 +42,7 @@ export * from "./instagram";
 export * from "./linkedin";
 export * from "./openai";
 export * from "./product-hunt";
+export * from "./reddit";
 export * from "./slack";
 export * from "./tiktok";
 export * from "./twitter";
@@ -50,6 +55,7 @@ export * from "./payment-platforms/card-discover";
 export * from "./payment-platforms/card-mastercard";
 export * from "./payment-platforms/card-visa";
 export * from "./payment-platforms/paypal";
+export * from "./payment-platforms/stablecoin";
 export * from "./payment-platforms/stripe-icon";
 export * from "./payment-platforms/stripe-link";
 

@@ -1,7 +1,7 @@
 import { getPayoutEligibilityFilter } from "@/lib/api/payouts/payout-eligibility-filter";
 import { FAST_ACH_FEE_CENTS, FOREX_MARKUP_RATE } from "@/lib/constants/payouts";
 import { qstash } from "@/lib/cron";
-import { queueBatchEmail } from "@/lib/email/queue-batch-email";
+import { calculatePayoutFeeWithWaiver } from "@/lib/partners/calculate-payout-fee-with-waiver";
 import {
   CUTOFF_PERIOD,
   CUTOFF_PERIOD_TYPES,
@@ -9,10 +9,22 @@ import {
 import { stripe } from "@/lib/stripe";
 import { createFxQuote } from "@/lib/stripe/create-fx-quote";
 import { calculatePayoutFeeForMethod } from "@/lib/stripe/payment-methods";
+import { sendEmail } from "@dub/email";
 import ProgramPayoutThankYou from "@dub/email/templates/program-payout-thank-you";
 import { prisma } from "@dub/prisma";
-import { Program, ProgramPayoutMode, Project } from "@dub/prisma/client";
-import { APP_DOMAIN_WITH_NGROK, currencyFormatter, log } from "@dub/utils";
+import {
+  Invoice,
+  Program,
+  ProgramPayoutMode,
+  Project,
+} from "@dub/prisma/client";
+import {
+  APP_DOMAIN_WITH_NGROK,
+  currencyFormatter,
+  log,
+  nFormatter,
+  pluralize,
+} from "@dub/utils";
 
 const nonUsdPaymentMethodTypes = {
   sepa_debit: "eur",
@@ -30,16 +42,18 @@ interface ProcessPayoutsProps {
     | "payoutsUsage"
     | "payoutsLimit"
     | "payoutFee"
+    | "payoutFeeWaiverLimit"
+    | "payoutFeeWaiverUsage"
     | "webhookEnabled"
   >;
   program: Pick<
     Program,
-    "id" | "name" | "logo" | "minPayoutAmount" | "supportEmail"
+    "id" | "name" | "logo" | "url" | "minPayoutAmount" | "supportEmail"
   > & {
     payoutMode: ProgramPayoutMode;
   };
+  invoice: Pick<Invoice, "id" | "paymentMethod">;
   userId: string;
-  invoiceId: string;
   paymentMethodId: string;
   cutoffPeriod?: CUTOFF_PERIOD_TYPES;
   selectedPayoutId?: string;
@@ -49,8 +63,8 @@ interface ProcessPayoutsProps {
 export async function processPayouts({
   workspace,
   program,
+  invoice,
   userId,
-  invoiceId,
   paymentMethodId,
   cutoffPeriod,
   selectedPayoutId,
@@ -60,12 +74,6 @@ export async function processPayouts({
     (c) => c.id === cutoffPeriod,
   )?.value;
 
-  const invoice = await prisma.invoice.findUniqueOrThrow({
-    where: {
-      id: invoiceId,
-    },
-  });
-
   const res = await prisma.payout.updateMany({
     where: {
       ...(selectedPayoutId
@@ -73,19 +81,11 @@ export async function processPayouts({
         : excludedPayoutIds && excludedPayoutIds.length > 0
           ? { id: { notIn: excludedPayoutIds } }
           : {}),
-      ...getPayoutEligibilityFilter(program),
+      ...getPayoutEligibilityFilter({ program, workspace }),
       ...(cutoffPeriodValue && {
-        OR: [
-          {
-            periodStart: null,
-            periodEnd: null,
-          },
-          {
-            periodEnd: {
-              lte: cutoffPeriodValue,
-            },
-          },
-        ],
+        periodEnd: {
+          lte: cutoffPeriodValue,
+        },
       }),
     },
     data: {
@@ -158,9 +158,19 @@ export async function processPayouts({
     `Using payout fee of ${payoutFee} for payment method ${paymentMethod.type}`,
   );
 
-  const fastAchFee =
-    invoice.paymentMethod === "ach_fast" ? FAST_ACH_FEE_CENTS : 0;
-  const invoiceFee = Math.round(totalPayoutAmount * payoutFee) + fastAchFee;
+  const {
+    fee: invoiceFee,
+    feeFreeAmount,
+    feeChargedAmount,
+    feeWaiverRemaining,
+  } = calculatePayoutFeeWithWaiver({
+    payoutAmount: totalPayoutAmount,
+    payoutFee,
+    payoutFeeWaiverLimit: workspace.payoutFeeWaiverLimit,
+    payoutFeeWaiverUsage: workspace.payoutFeeWaiverUsage,
+    fastAchFee: invoice.paymentMethod === "ach_fast" ? FAST_ACH_FEE_CENTS : 0,
+  });
+
   const invoiceTotal = totalPayoutAmount + invoiceFee;
 
   console.log({
@@ -169,6 +179,9 @@ export async function processPayouts({
     totalPayoutAmount,
     invoiceFee,
     invoiceTotal,
+    feeFreeAmount,
+    feeChargedAmount,
+    feeWaiverRemaining,
   });
 
   await prisma.invoice.update({
@@ -247,9 +260,15 @@ export async function processPayouts({
       payoutsUsage: {
         increment: totalPayoutAmount,
       },
+      payoutFeeWaiverUsage: {
+        increment: feeFreeAmount,
+      },
     },
     include: {
       users: {
+        where: {
+          userId,
+        },
         select: {
           user: {
             select: {
@@ -262,7 +281,7 @@ export async function processPayouts({
   });
 
   await log({
-    message: `*${program.name}* just sent a payout of *${currencyFormatter(totalPayoutAmount)}* :money_with_wings: \n\n Fees earned: *${currencyFormatter(invoiceFee)} (${payoutFee * 100}%)* :money_mouth_face:`,
+    message: `<${program.url}|*${program.name}*> (\`${workspace.slug}\`) just sent a payout of *${currencyFormatter(totalPayoutAmount)}* :money_with_wings: \n\n Fees earned: *${currencyFormatter(invoiceFee)} (${payoutFee * 100}%)* :money_mouth_face:`,
     type: "payouts",
   });
 
@@ -279,13 +298,21 @@ export async function processPayouts({
     console.error("Error sending message to Qstash", qstashResponse);
   }
 
-  await queueBatchEmail<typeof ProgramPayoutThankYou>(
-    users.map(({ user }) => ({
-      to: user.email!,
-      subject: `Thank you for your ${currencyFormatter(totalPayoutAmount)} payout to ${res.count} partners`,
-      templateName: "ProgramPayoutThankYou",
-      templateProps: {
-        email: user.email!,
+  // should never happen, but just in case
+  if (users.length === 0) {
+    console.error(
+      `No users found for workspace ${workspace.id}. Skipping email send...`,
+    );
+    return;
+  }
+
+  const userWhoInitiatedPayout = users[0].user;
+  if (userWhoInitiatedPayout.email) {
+    const emailRes = await sendEmail({
+      to: userWhoInitiatedPayout.email,
+      subject: `Thank you for your ${currencyFormatter(totalPayoutAmount)} payout to ${nFormatter(res.count, { full: true })} ${pluralize("partner", res.count)}`,
+      react: ProgramPayoutThankYou({
+        email: userWhoInitiatedPayout.email,
         workspace,
         program: {
           name: program.name,
@@ -294,7 +321,10 @@ export async function processPayouts({
           amount: totalPayoutAmount,
           partnersCount: res.count,
         },
-      },
-    })),
-  );
+      }),
+    });
+    console.log(
+      `Sent email to user ${userWhoInitiatedPayout.email}: ${JSON.stringify(emailRes, null, 2)}`,
+    );
+  }
 }

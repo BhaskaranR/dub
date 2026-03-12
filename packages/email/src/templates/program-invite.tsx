@@ -133,7 +133,7 @@ export default function ProgramInvite({
   body,
 }: {
   email: string;
-  name: string | null;
+  name?: string | null;
   program: {
     name: string;
     slug: string;
@@ -158,7 +158,7 @@ export default function ProgramInvite({
           <Container className="mx-auto my-8 max-w-[600px] px-8 py-8">
             <Section className="mb-8 mt-6">
               <Img
-                src={program.logo || "https://assets.dub.co/logo.png"}
+                src={program.logo || "https://assets.dub.co/wordmark.png"}
                 height="32"
                 alt={program.name}
               />
@@ -198,7 +198,7 @@ export default function ProgramInvite({
             <Section className="my-8">
               <Link
                 className="rounded-lg bg-neutral-900 px-4 py-3 text-xs font-semibold text-white no-underline"
-                href={`https://partners.dub.co/${program.slug}/register?email=${encodeURIComponent(email)}&next=/programs/${program.slug}`}
+                href={`https://partners.dub.co/${program.slug}/register?email=${encodeURIComponent(email)}&next=/programs/${program.slug}/invite`}
               >
                 Accept Invite
               </Link>

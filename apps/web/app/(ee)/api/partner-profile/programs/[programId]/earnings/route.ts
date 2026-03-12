@@ -1,4 +1,5 @@
 import { getStartEndDates } from "@/lib/analytics/utils/get-start-end-dates";
+import { obfuscateCustomerEmail } from "@/lib/api/partner-profile/obfuscate-customer-email";
 import { getProgramEnrollmentOrThrow } from "@/lib/api/programs/get-program-enrollment-or-throw";
 import { withPartnerProfile } from "@/lib/auth/partner";
 import { generateRandomName } from "@/lib/names";
@@ -8,7 +9,7 @@ import {
 } from "@/lib/zod/schemas/partner-profile";
 import { prisma } from "@dub/prisma";
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import * as z from "zod/v4";
 
 // GET /api/partner-profile/programs/[programId]/earnings – get earnings for a partner in a program enrollment
 export const GET = withPartnerProfile(
@@ -23,7 +24,7 @@ export const GET = withPartnerProfile(
       });
 
     const {
-      page,
+      page = 1,
       pageSize,
       type,
       status,
@@ -58,8 +59,8 @@ export const GET = withPartnerProfile(
         customerId,
         payoutId,
         createdAt: {
-          gte: startDate.toISOString(),
-          lte: endDate.toISOString(),
+          gte: startDate,
+          lte: endDate,
         },
       },
       include: {
@@ -89,7 +90,7 @@ export const GET = withPartnerProfile(
                 ...e.customer,
                 email: customerDataSharingEnabledAt
                   ? customerEmail
-                  : customerEmail.replace(/(?<=^.).+(?=.@)/, "****"),
+                  : obfuscateCustomerEmail(customerEmail),
                 country: e.customer?.country,
               }
             : null,

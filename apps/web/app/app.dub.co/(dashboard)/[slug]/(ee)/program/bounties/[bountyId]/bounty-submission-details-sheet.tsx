@@ -1,14 +1,21 @@
 "use client";
 
-import { approveBountySubmissionAction } from "@/lib/actions/partners/approve-bounty-submission";
-import { REJECT_BOUNTY_SUBMISSION_REASONS } from "@/lib/constants/bounties";
+import { REJECT_BOUNTY_SUBMISSION_REASONS } from "@/lib/bounty/constants";
+import { calculateSocialMetricsRewardAmount } from "@/lib/bounty/rewards";
+import { BOUNTY_SUBMISSION_STATUS_BADGES } from "@/lib/bounty/submission-status";
+import { resolveBountyDetails } from "@/lib/bounty/utils";
 import { mutatePrefix } from "@/lib/swr/mutate";
+import { useApiMutation } from "@/lib/swr/use-api-mutation";
 import useBounty from "@/lib/swr/use-bounty";
 import useWorkspace from "@/lib/swr/use-workspace";
 import { BountySubmissionProps } from "@/lib/types";
-import { useConfirmModal } from "@/ui/modals/confirm-modal";
-import { PartnerInfoSection } from "@/ui/partners/partner-info-section";
-import { useRejectBountySubmissionModal } from "@/ui/partners/reject-bounty-submission-modal";
+import { useConfirmApproveBountySubmissionModal } from "@/ui/modals/confirm-approve-bounty-submission-modal";
+import { PLATFORM_ICONS } from "@/ui/partners/bounties/bounty-platform-icons";
+import { EmphasisNumber } from "@/ui/partners/bounties/bounty-progress-bar-row";
+import { getBountyRewardCriteria } from "@/ui/partners/bounties/bounty-reward-criteria";
+import { BountySocialContentPreview } from "@/ui/partners/bounties/bounty-social-content-preview";
+import { BountySocialMetricsRewardsTable } from "@/ui/partners/bounties/bounty-social-metrics-rewards-table";
+import { useRejectBountySubmissionModal } from "@/ui/partners/bounties/reject-bounty-submission-modal";
 import { ButtonLink } from "@/ui/placeholders/button-link";
 import { AmountInput } from "@/ui/shared/amount-input";
 import { X } from "@/ui/shared/icons";
@@ -17,17 +24,32 @@ import {
   ChevronLeft,
   ChevronRight,
   CopyButton,
+  DynamicTooltipWrapper,
   Sheet,
   StatusBadge,
+  Tooltip,
   useKeyboardShortcut,
   useRouterStuff,
 } from "@dub/ui";
-import { currencyFormatter, formatDate, getPrettyUrl } from "@dub/utils";
+import { CircleHalfDottedClock } from "@dub/ui/icons";
+import {
+  cn,
+  currencyFormatter,
+  formatDate,
+  getPrettyUrl,
+  nFormatter,
+  OG_AVATAR_URL,
+  timeAgo,
+} from "@dub/utils";
 import Linkify from "linkify-react";
-import { useAction } from "next-safe-action/hooks";
-import { Dispatch, SetStateAction, useMemo, useState } from "react";
+import {
+  Dispatch,
+  SetStateAction,
+  useCallback,
+  useMemo,
+  useState,
+} from "react";
 import { toast } from "sonner";
-import { BOUNTY_SUBMISSION_STATUS_BADGES } from "./bounty-submission-status-badges";
 
 type BountySubmissionDetailsSheetProps = {
   submission: BountySubmissionProps;
@@ -43,48 +65,38 @@ function BountySubmissionDetailsSheetContent({
   setIsOpen,
 }: BountySubmissionDetailsSheetProps) {
   const { bounty } = useBounty();
-  const { id: workspaceId, slug: workspaceSlug } = useWorkspace();
+  const { slug: workspaceSlug } = useWorkspace();
 
   const { setShowRejectModal, RejectBountySubmissionModal } =
     useRejectBountySubmissionModal(submission, onNext);
 
+  const {
+    openConfirmApproveBountySubmissionModal,
+    ConfirmApproveBountySubmissionModal,
+  } = useConfirmApproveBountySubmissionModal({
+    onApproveSuccess: () => (onNext ? onNext() : setIsOpen(false)),
+  });
+
   const [rewardAmount, setRewardAmount] = useState<number | null>(null);
 
-  const {
-    executeAsync: approveBountySubmission,
-    isPending: isApprovingBountySubmission,
-  } = useAction(approveBountySubmissionAction, {
-    onSuccess: () => {
-      toast.success("Bounty submission approved successfully!");
-      onNext ? onNext() : setIsOpen(false);
-      mutatePrefix(`/api/bounties/${bounty?.id}/submissions`);
-    },
-    onError({ error }) {
-      toast.error(error.serverError);
-    },
-  });
+  const { isSubmitting: isRefreshingSocialMetrics, makeRequest } =
+    useApiMutation();
 
-  const {
-    setShowConfirmModal: setShowApproveBountySubmissionModal,
-    confirmModal: approveBountySubmissionModal,
-  } = useConfirmModal({
-    title: "Approve Bounty Submission",
-    description: "Are you sure you want to approve this bounty submission?",
-    confirmText: "Approve",
-    confirmShortcut: "a",
-    confirmShortcutOptions: { sheet: true, modal: true },
-    onConfirm: async () => {
-      if (!workspaceId || !submission?.id) {
-        return;
-      }
+  const refreshSubmissionSocialMetrics = useCallback(() => {
+    if (!bounty?.id || !submission?.id) return;
 
-      await approveBountySubmission({
-        workspaceId,
-        submissionId: submission.id,
-        rewardAmount: rewardAmount ? rewardAmount * 100 : null,
-      });
-    },
-  });
+    makeRequest(`/api/bounties/${bounty.id}/sync-social-metrics`, {
+      method: "POST",
+      body: { submissionId: submission.id },
+      onSuccess: async () => {
+        await mutatePrefix(`/api/bounties/${bounty.id}/submissions`);
+        toast.success("Social content stats updated successfully.");
+      },
+      onError: (error) => {
+        toast.error(error);
+      },
+    });
+  }, [bounty?.id, submission?.id, makeRequest]);
 
   // right arrow key onNext
   useKeyboardShortcut(
@@ -112,7 +124,11 @@ function BountySubmissionDetailsSheetContent({
     "a",
     () => {
       if (isValidForm && submission.status !== "draft") {
-        setShowApproveBountySubmissionModal(true);
+        openConfirmApproveBountySubmissionModal(
+          submission,
+          bounty ?? null,
+          rewardAmount,
+        );
       }
     },
     { sheet: true },
@@ -140,9 +156,27 @@ function BountySubmissionDetailsSheetContent({
     return true;
   }, [bounty, rewardAmount]);
 
-  if (!submission || !submission.partner) {
+  if (!submission || !submission.partner || !bounty) {
     return null;
   }
+
+  const bountyInfo = resolveBountyDetails(bounty);
+  const criteriaTexts = bounty ? getBountyRewardCriteria(bounty) : [];
+
+  const hasSocialContent =
+    bountyInfo?.hasSocialMetrics && (submission.urls?.length ?? 0) > 0;
+
+  const socialPlatform = bountyInfo?.socialPlatform;
+  const SocialPlatformIcon = socialPlatform
+    ? PLATFORM_ICONS[socialPlatform.value]
+    : null;
+  const socialMetricCount = submission.socialMetricCount ?? 0;
+  const socialMinCount = bountyInfo?.socialMetrics?.minCount ?? 0;
+  const socialMetricPercent =
+    socialMinCount > 0
+      ? Math.min((socialMetricCount / socialMinCount) * 100, 100)
+      : 100;
+  const socialMetricComplete = socialMetricPercent >= 100;
 
   return (
     <div className="flex h-full flex-col">
@@ -182,29 +216,42 @@ function BountySubmissionDetailsSheetContent({
       </div>
 
       <div className="flex grow flex-col">
-        <div className="border-b border-neutral-200 bg-neutral-50 p-6">
-          <PartnerInfoSection
-            partner={submission.partner}
-            showPartnerStatus={false}
-          >
+        <div className="px-6 pt-6">
+          <div className="flex items-center gap-4 rounded-xl bg-neutral-100 px-4 py-3">
+            <img
+              src={
+                submission.partner.image ||
+                `${OG_AVATAR_URL}${submission.partner.id}`
+              }
+              alt={submission.partner.name}
+              className="size-10 shrink-0 rounded-full"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="text-base font-semibold text-neutral-800">
+                {submission.partner.name}
+              </div>
+              <div className="text-sm font-medium text-neutral-500">
+                {submission.partner.email}
+              </div>
+            </div>
             <ButtonLink
               href={`/${workspaceSlug}/program/partners/${submission.partner.id}`}
               variant="secondary"
-              className="h-8 w-fit px-3 py-2 text-sm font-medium"
+              className="h-8 shrink-0 px-3 text-sm font-medium"
               target="_blank"
             >
-              View profile
+              View
             </ButtonLink>
-          </PartnerInfoSection>
+          </div>
         </div>
 
-        <div className="flex grow flex-col gap-8 overflow-y-auto p-6">
+        <div className="flex grow flex-col gap-6 overflow-y-auto p-6">
           <div>
             <h2 className="text-base font-semibold text-neutral-900">
-              Bounty details
+              Details
             </h2>
 
-            <div className="mt-4 max-w-md space-y-3">
+            <div className="mt-3 max-w-md space-y-2">
               {[
                 {
                   label: "Status",
@@ -231,6 +278,34 @@ function BountySubmissionDetailsSheetContent({
                       })
                     : "-",
                 },
+                ...(bountyInfo?.socialMetrics
+                  ? [
+                      {
+                        label: "Criteria",
+                        value:
+                          criteriaTexts.length > 1 ? (
+                            <DynamicTooltipWrapper
+                              tooltipProps={{
+                                // remove first item from criteriaTexts
+                                content: criteriaTexts.slice(1).join("\n"),
+                                align: "end",
+                              }}
+                            >
+                              <div
+                                className={cn(
+                                  "w-fit text-sm font-medium text-neutral-800",
+                                  "cursor-help underline decoration-dotted underline-offset-2",
+                                )}
+                              >
+                                {`${bountyInfo.socialMetrics.minCount} ${bountyInfo.socialMetrics.metric}`}
+                              </div>
+                            </DynamicTooltipWrapper>
+                          ) : (
+                            `${bountyInfo.socialMetrics.minCount} ${bountyInfo.socialMetrics.metric}`
+                          ),
+                      },
+                    ]
+                  : []),
                 ...(submission.status === "rejected"
                   ? [
                       {
@@ -245,9 +320,32 @@ function BountySubmissionDetailsSheetContent({
                   : [
                       {
                         label: "Reward",
-                        value: submission.commission?.earnings
-                          ? currencyFormatter(submission.commission.earnings)
-                          : "-",
+                        value: (() => {
+                          if (submission.commission?.earnings != null) {
+                            return currencyFormatter(
+                              submission.commission.earnings,
+                            );
+                          }
+                          const estimatedEarnings =
+                            calculateSocialMetricsRewardAmount({
+                              bounty,
+                              submission,
+                            });
+                          if (
+                            estimatedEarnings != null &&
+                            estimatedEarnings > 0
+                          ) {
+                            return (
+                              <Tooltip content="Estimated earnings based on reached reward tiers">
+                                <div className="hover:text-content-emphasis text-content-muted flex w-fit cursor-help items-center gap-1 underline decoration-dotted underline-offset-2">
+                                  <CircleHalfDottedClock className="size-3.5 shrink-0" />{" "}
+                                  {currencyFormatter(estimatedEarnings)}
+                                </div>
+                              </Tooltip>
+                            );
+                          }
+                          return "-";
+                        })(),
                       },
                     ]),
               ].map((item, index) => (
@@ -284,11 +382,80 @@ function BountySubmissionDetailsSheetContent({
 
           {bounty?.type === "submission" && (
             <div>
-              <h2 className="text-base font-semibold text-neutral-900">
-                Bounty submission
-              </h2>
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="text-base font-semibold text-neutral-900">
+                  Submission
+                </h2>
+                {hasSocialContent && submission.status !== "approved" && (
+                  <div className="flex shrink-0 items-center gap-3">
+                    {submission.socialMetricsLastSyncedAt ? (
+                      <span className="whitespace-nowrap text-xs font-medium text-neutral-500">
+                        Last sync{" "}
+                        {timeAgo(submission.socialMetricsLastSyncedAt, {
+                          withAgo: true,
+                        })}
+                      </span>
+                    ) : null}
+                    <Button
+                      variant="secondary"
+                      text="Refresh"
+                      loading={isRefreshingSocialMetrics}
+                      onClick={refreshSubmissionSocialMetrics}
+                      className="h-8 rounded-lg px-3"
+                    />
+                  </div>
+                )}
+              </div>
 
-              <div className="mt-6 flex flex-col gap-6">
+              <div className="mt-3 flex flex-col gap-6">
+                {hasSocialContent && (
+                  <div className="rounded-xl border border-neutral-200 bg-neutral-50">
+                    <div className="flex flex-col gap-3 px-4 pb-3 pt-4">
+                      <div className="h-1 w-full rounded-full bg-neutral-200">
+                        <div
+                          className={cn(
+                            "h-full rounded-full",
+                            socialMetricComplete
+                              ? "bg-green-600"
+                              : "bg-amber-600",
+                          )}
+                          style={{ width: `${socialMetricPercent}%` }}
+                        />
+                      </div>
+
+                      {SocialPlatformIcon && bountyInfo?.socialMetrics && (
+                        <div className="flex items-center gap-2">
+                          <SocialPlatformIcon className="size-4 shrink-0" />
+                          <p className="text-sm font-medium text-neutral-600">
+                            <EmphasisNumber>
+                              {nFormatter(socialMetricCount, { full: true })}
+                            </EmphasisNumber>
+                            {" of "}
+                            <EmphasisNumber>
+                              {nFormatter(socialMinCount, { full: true })}
+                            </EmphasisNumber>
+                            {` ${bountyInfo.socialMetrics.metric} generated`}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    <BountySocialContentPreview
+                      bounty={bounty}
+                      submission={submission}
+                    />
+                  </div>
+                )}
+
+                {bountyInfo?.hasSocialMetrics &&
+                  ["draft", "submitted", "approved"].includes(
+                    submission.status,
+                  ) && (
+                    <BountySocialMetricsRewardsTable
+                      bounty={bounty}
+                      submission={submission}
+                    />
+                  )}
+
                 {Boolean(submission.files?.length) && (
                   <div>
                     <h2 className="text-content-emphasis text-sm font-medium">
@@ -315,14 +482,17 @@ function BountySubmissionDetailsSheetContent({
                   </div>
                 )}
 
-                {Boolean(submission.urls?.length) && (
+                {Boolean(submission.urls?.length) && !hasSocialContent && (
                   <div>
                     <h2 className="text-content-emphasis text-sm font-medium">
                       URLs
                     </h2>
                     <div className="mt-2 flex flex-col gap-2">
                       {submission.urls?.map((url, idx) => (
-                        <div className="relative" key={url}>
+                        <div
+                          className="relative"
+                          key={`${submission.id}-${idx}-${url}`}
+                        >
                           <div className="border-border-subtle block w-full rounded-lg border px-3 py-2 pl-10 pr-12">
                             <a
                               href={url}
@@ -412,20 +582,22 @@ function BountySubmissionDetailsSheetContent({
                           ? "Bounty submission already rejected."
                           : undefined
                     }
-                    disabled={
-                      isApprovingBountySubmission ||
-                      submission.status === "draft"
-                    }
+                    disabled={submission.status === "draft"}
                     onClick={() => setShowRejectModal(true)}
                   />
 
                   <Button
-                    type="submit"
+                    type="button"
                     variant="primary"
                     text="Approve"
                     shortcut="A"
-                    loading={isApprovingBountySubmission}
-                    onClick={() => setShowApproveBountySubmissionModal(true)}
+                    onClick={() =>
+                      openConfirmApproveBountySubmissionModal(
+                        submission,
+                        bounty ?? null,
+                        rewardAmount,
+                      )
+                    }
                     disabledTooltip={
                       submission.status === "draft"
                         ? "Bounty submission is in progress."
@@ -441,7 +613,7 @@ function BountySubmissionDetailsSheetContent({
       </div>
 
       <RejectBountySubmissionModal />
-      {approveBountySubmissionModal}
+      {ConfirmApproveBountySubmissionModal}
     </div>
   );
 }

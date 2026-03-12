@@ -34,17 +34,14 @@ function ModalInner({
   setShowModal,
   commission,
 }: Omit<ModalProps, "showModal">) {
-  const { id: workspaceId, defaultProgramId } = useWorkspace();
+  const { id: workspaceId } = useWorkspace();
 
   const { executeAsync, isExecuting, hasSucceeded } = useAction(
     markCommissionDuplicateAction,
     {
       onSuccess: async () => {
         toast.success("Successfully marked commission as duplicate.");
-        await mutatePrefix([
-          "/api/commissions",
-          `/api/programs/${defaultProgramId}/payouts`,
-        ]);
+        await mutatePrefix(["/api/commissions", "/api/payouts"]);
         setShowModal(false);
       },
       onError: () => {
@@ -64,12 +61,16 @@ function ModalInner({
         minute: "2-digit",
       }),
 
-      Customer: (
-        <CustomerRowItem
-          customer={commission.customer!}
-          avatarClassName="size-5"
-        />
-      ),
+      ...(commission.customer
+        ? {
+            Customer: (
+              <CustomerRowItem
+                customer={commission.customer!}
+                avatarClassName="size-5"
+              />
+            ),
+          }
+        : {}),
 
       Partner: (
         <PartnerRowItem partner={commission.partner!} showPermalink={false} />
@@ -110,13 +111,13 @@ function ModalInner({
         </div>
 
         <div className="rounded-lg border border-neutral-200 bg-white p-4 sm:p-6">
-          <div className="grid grid-cols-2 gap-y-4">
+          <div className="grid grid-cols-3 gap-y-4">
             {Object.entries(commissionItem).map(([key, value]) => (
               <React.Fragment key={key}>
                 <div className="text-sm font-medium text-neutral-500">
                   {key}
                 </div>
-                <div className="text-sm font-medium text-neutral-800">
+                <div className="col-span-2 text-sm font-medium text-neutral-800">
                   {value}
                 </div>
               </React.Fragment>

@@ -7,16 +7,17 @@ import { transformDomain } from "@/lib/api/domains/transform-domain";
 import { validateDomain } from "@/lib/api/domains/utils";
 import { DubApiError } from "@/lib/api/errors";
 import { parseRequestBody } from "@/lib/api/utils";
+import { isNonEmptyJson } from "@/lib/api/utils/is-non-empty-json";
 import { withWorkspace } from "@/lib/auth";
 import { setRenewOption } from "@/lib/dynadot/set-renew-option";
 import { storage } from "@/lib/storage";
 import { updateDomainBodySchema } from "@/lib/zod/schemas/domains";
 import { prisma } from "@dub/prisma";
+import { Prisma } from "@dub/prisma/client";
 import { combineWords, nanoid, R2_URL } from "@dub/utils";
-import { Prisma } from "@prisma/client";
 import { waitUntil } from "@vercel/functions";
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import * as z from "zod/v4";
 
 const updateDomainBodySchemaExtended = updateDomainBodySchema.extend({
   deepviewData: z.string().nullish(),
@@ -47,6 +48,7 @@ export const PATCH = withWorkspace(
       slug: domain,
       registeredDomain,
       logo: oldLogo,
+      partnerProgram,
     } = await getDomainOrThrow({
       workspace,
       domain: params.domain,
@@ -75,7 +77,7 @@ export const PATCH = withWorkspace(
         notFoundUrl ||
         assetLinks ||
         appleAppSiteAssociation ||
-        deepviewData
+        isNonEmptyJson(deepviewData)
       ) {
         const proFeaturesString = combineWords(
           [
@@ -84,7 +86,7 @@ export const PATCH = withWorkspace(
             notFoundUrl && "not found URLs",
             assetLinks && "Asset Links",
             appleAppSiteAssociation && "Apple App Site Association",
-            deepviewData && "Deep View",
+            isNonEmptyJson(deepviewData) && "Deep View",
           ].filter(Boolean) as string[],
         );
 
@@ -207,7 +209,29 @@ export const PATCH = withWorkspace(
             queueDomainUpdate({
               oldDomain: domain,
               newDomain: newDomain,
+              ...(partnerProgram && { programId: partnerProgram.id }),
             }),
+
+            ...(partnerProgram
+              ? [
+                  prisma.program.update({
+                    where: {
+                      id: partnerProgram.id,
+                    },
+                    data: {
+                      domain,
+                    },
+                  }),
+                  prisma.partnerGroupDefaultLink.updateMany({
+                    where: {
+                      programId: partnerProgram.id,
+                    },
+                    data: {
+                      domain,
+                    },
+                  }),
+                ]
+              : []),
           ]);
         }
       })(),
@@ -223,7 +247,11 @@ export const PATCH = withWorkspace(
 // DELETE /api/domains/[domain] - delete a workspace's domain
 export const DELETE = withWorkspace(
   async ({ params, workspace }) => {
-    const { slug: domain, registeredDomain } = await getDomainOrThrow({
+    const {
+      slug: domain,
+      registeredDomain,
+      partnerProgram,
+    } = await getDomainOrThrow({
       workspace,
       domain: params.domain,
       dubDomainChecks: true,
@@ -233,6 +261,14 @@ export const DELETE = withWorkspace(
       throw new DubApiError({
         code: "forbidden",
         message: "You cannot delete a Dub-provisioned domain.",
+      });
+    }
+
+    if (partnerProgram) {
+      throw new DubApiError({
+        code: "forbidden",
+        message:
+          "You cannot delete a domain that is actively in use in a partner program.",
       });
     }
 
