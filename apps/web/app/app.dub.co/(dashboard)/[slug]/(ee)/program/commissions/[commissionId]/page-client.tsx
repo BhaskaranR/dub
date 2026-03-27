@@ -4,6 +4,7 @@ import { useCommission } from "@/lib/swr/use-commission";
 import useGroups from "@/lib/swr/use-groups";
 import useWorkspace from "@/lib/swr/use-workspace";
 import { CommissionDetail, CommissionResponse } from "@/lib/types";
+import { CustomerAvatar } from "@/ui/customers/customer-avatar";
 import { PageContent } from "@/ui/layout/page-content";
 import { PageWidthWrapper } from "@/ui/layout/page-width-wrapper";
 import { ActivityEvent } from "@/ui/partners/activity-event";
@@ -12,8 +13,10 @@ import { CommissionRowMenu } from "@/ui/partners/commission-row-menu";
 import { CommissionStatusBadges } from "@/ui/partners/commission-status-badges";
 import { CommissionTypeBadge } from "@/ui/partners/commission-type-badge";
 import { GroupColorCircle } from "@/ui/partners/groups/group-color-circle";
+import { PartnerAvatar } from "@/ui/partners/partner-avatar";
 import { CommentCardDisplay } from "@/ui/partners/partner-comments";
 import { ConditionalLink } from "@/ui/shared/conditional-link";
+import { UserAvatar } from "@/ui/users/user-avatar";
 import {
   ChevronRight,
   InvoiceDollar,
@@ -26,7 +29,6 @@ import {
   currencyFormatter,
   formatDateTime,
   nFormatter,
-  OG_AVATAR_URL,
   pluralize,
 } from "@dub/utils";
 import { Row } from "@tanstack/react-table";
@@ -61,13 +63,9 @@ export function CommissionDetailsPageClient() {
               <ChevronRight className="text-content-subtle size-2.5 shrink-0 [&_*]:stroke-2" />
               <div className="flex items-center gap-2">
                 {commission?.partner && (
-                  <img
-                    src={
-                      commission.partner.image ||
-                      `${OG_AVATAR_URL}${commission.partner.name}`
-                    }
-                    alt={commission.partner.name}
-                    className="size-5 rounded-full"
+                  <PartnerAvatar
+                    partner={commission.partner}
+                    className="size-5 shrink-0"
                   />
                 )}
                 <span className="text-lg font-semibold leading-7 text-neutral-900">
@@ -133,13 +131,9 @@ function CommissionDetailsContent({
                   />
                 </div>
               ) : (
-                <img
-                  src={customer?.avatar || `${OG_AVATAR_URL}${customer?.id}`}
-                  alt={customer?.id}
-                  className="size-6 rounded-full"
-                  title={customer?.name}
-                  loading="lazy"
-                />
+                customer && (
+                  <CustomerAvatar customer={customer} className="size-6" />
+                )
               )}
 
               <div className="flex flex-col">
@@ -216,13 +210,9 @@ function CommissionDetailsContent({
         rel="noopener noreferrer"
         className="flex min-w-0 cursor-alias items-center gap-1.5 text-neutral-500 decoration-dotted hover:text-neutral-950 hover:underline"
       >
-        <img
-          src={
-            commission.partner.image ||
-            `${OG_AVATAR_URL}${commission.partner.name}`
-          }
-          alt={commission.partner.name}
-          className="size-4 shrink-0 rounded-full"
+        <PartnerAvatar
+          partner={commission.partner}
+          className="size-4 shrink-0"
         />
         <span className="truncate">{commission.partner.name}</span>
       </Link>
@@ -344,13 +334,9 @@ function CommissionActivity({
                         <>
                           <span className="text-sm text-neutral-500">by</span>
                           <div className="flex h-6 items-center gap-2 rounded-lg bg-neutral-100 px-2 py-1">
-                            <img
-                              src={
-                                commission.payout.user.image ||
-                                `${OG_AVATAR_URL}${commission.payout.user.id}`
-                              }
-                              alt={commission.payout.user.name ?? ""}
-                              className="size-4 rounded-full"
+                            <UserAvatar
+                              user={commission.payout.user}
+                              className="size-4"
                             />
                             <span className="text-[13px] text-neutral-700">
                               {commission.payout.user.name}
@@ -477,14 +463,7 @@ function CommissionActivity({
                   <>
                     <span className="text-sm text-neutral-500">by</span>
                     <div className="flex h-6 items-center gap-2 rounded-lg bg-neutral-100 px-2 py-1">
-                      <img
-                        src={
-                          commission.user.image ||
-                          `${OG_AVATAR_URL}${commission.user.id}`
-                        }
-                        alt={commission.user.name ?? ""}
-                        className="size-4 rounded-full"
-                      />
+                      <UserAvatar user={commission.user} className="size-4" />
                       <span className="text-[13px] text-neutral-700">
                         {commission.user.name}
                       </span>

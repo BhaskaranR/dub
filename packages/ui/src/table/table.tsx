@@ -803,7 +803,7 @@ export function Table<T>({
         </div>
       )}
       {pagination && !error && !!data?.length && !!rowCount && (
-        <div className="border-border-subtle bg-bg-default text-content-default sticky bottom-0 mx-auto -mt-px flex w-full max-w-full items-center justify-between rounded-b-[inherit] border-t px-4 py-3.5 text-sm leading-6">
+        <div className="border-border-subtle bg-bg-default text-content-default sticky bottom-0 z-10 mx-auto -mt-px flex w-full max-w-full items-center justify-between rounded-b-[inherit] border-t px-4 py-3.5 text-sm leading-6">
           <div>
             <span className="hidden sm:inline-block">Viewing</span>{" "}
             <span className="font-medium">
@@ -851,9 +851,10 @@ export function Table<T>({
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="bg-bg-default/50 absolute inset-0 h-full"
+            className="bg-bg-default/50 absolute inset-0 h-full rounded-xl"
           >
-            <div className="flex h-[75vh] w-full items-center justify-center">
+            {/* here we're using min(75%,75vh) to ensure proper placement on full height vs partial height tables */}
+            <div className="flex h-[min(75%,75vh)] w-full items-center justify-center">
               <LoadingSpinner />
             </div>
           </motion.div>
