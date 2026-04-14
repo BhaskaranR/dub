@@ -3,9 +3,13 @@
 import { parseActionError } from "@/lib/actions/parse-action-errors";
 import { onboardPartnerAction } from "@/lib/actions/partners/onboard-partner";
 import { getValidInternalRedirectPath } from "@/lib/middleware/utils/is-valid-internal-redirect";
-import { onboardPartnerSchema } from "@/lib/zod/schemas/partners";
+import {
+  MAX_PARTNER_DESCRIPTION_LENGTH,
+  onboardPartnerSchema,
+} from "@/lib/zod/schemas/partners";
 import { CountryCombobox } from "@/ui/partners/country-combobox";
 import { useCountryChangeWarningModal } from "@/ui/partners/use-country-change-warning-modal";
+import { MaxCharactersCounter } from "@/ui/shared/max-characters-counter";
 import { Partner } from "@dub/prisma/client";
 import {
   Button,
@@ -94,9 +98,11 @@ export function OnboardingForm({
         redirectPath: searchParams.get("next"),
         currentUrl: window.location.href,
       });
-      router.push(
-        `/onboarding/platforms${next ? `?next=${encodeURIComponent(next)}` : ""}`,
-      );
+      if (next) {
+        router.push(next);
+      } else {
+        router.push("/onboarding/platforms");
+      }
     },
     onError: ({ error, input }) => {
       toast.error(parseActionError(error, "An unknown error occurred."));
@@ -215,18 +221,26 @@ export function OnboardingForm({
           Description
           <span className="font-normal text-neutral-500"> (optional)</span>
         </span>
-        <ReactTextareaAutosize
-          className={cn(
-            "mt-1.5 block w-full rounded-md focus:outline-none sm:text-sm",
-            errors.description
-              ? "border-red-300 pr-10 text-red-900 placeholder-red-300 focus:border-red-500 focus:ring-red-500"
-              : "border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-neutral-500 focus:ring-neutral-500",
-          )}
-          placeholder="Tell us about the kind of content you create – e.g. tech, travel, fashion, etc."
-          minRows={3}
-          onKeyDown={handleKeyDown}
-          {...register("description")}
-        />
+        <div>
+          <ReactTextareaAutosize
+            className={cn(
+              "mt-1.5 block w-full rounded-md focus:outline-none sm:text-sm",
+              errors.description
+                ? "border-red-300 pr-10 text-red-900 placeholder-red-300 focus:border-red-500 focus:ring-red-500"
+                : "border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-neutral-500 focus:ring-neutral-500",
+            )}
+            placeholder="Tell us about the kind of content you create – e.g. tech, travel, fashion, etc."
+            maxLength={MAX_PARTNER_DESCRIPTION_LENGTH}
+            minRows={3}
+            onKeyDown={handleKeyDown}
+            {...register("description")}
+          />
+          <MaxCharactersCounter
+            name="description"
+            maxLength={MAX_PARTNER_DESCRIPTION_LENGTH}
+            control={control}
+          />
+        </div>
       </label>
 
       <LayoutGroup>

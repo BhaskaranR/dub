@@ -146,6 +146,7 @@ export const partnerNotificationTypes = z.enum([
   "newMessageFromProgram",
   "marketingCampaign",
   "connectPayoutReminder",
+  "monthlyProgramSummary",
 ]);
 
 export const partnerBountySubmissionSchema = BountySubmissionSchema.extend({
@@ -247,7 +248,7 @@ export const getPartnerCustomersQuerySchema = z
         "A filter on the list based on the customer's `linkId` field (the referral link ID).",
       ),
     sortBy: z
-      .enum(["createdAt", "saleAmount"])
+      .enum(["createdAt", "firstSaleAt", "subscriptionCanceledAt"])
       .optional()
       .default("createdAt")
       .describe(

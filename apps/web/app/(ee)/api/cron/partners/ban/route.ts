@@ -1,5 +1,4 @@
 import { deleteDiscountCodes } from "@/lib/api/discounts/delete-discount-code";
-import { reportCrossProgramBanToNetwork } from "@/lib/api/fraud/report-cross-program-ban-to-network";
 import { linkCache } from "@/lib/api/links/cache";
 import { includeTags } from "@/lib/api/links/include-tags";
 import { syncTotalCommissions } from "@/lib/api/partners/sync-total-commissions";
@@ -25,7 +24,7 @@ export const POST = withCron(async ({ rawBody }) => {
 
   console.info(`Banning partner ${partnerId} from program ${programId}...`);
 
-  const { partner, links, ...programEnrollment } =
+  const { partner, links, program, ...programEnrollment } =
     await getProgramEnrollmentOrThrow({
       partnerId,
       programId,
@@ -35,6 +34,11 @@ export const POST = withCron(async ({ rawBody }) => {
           include: {
             ...includeTags,
             discountCode: true,
+          },
+        },
+        program: {
+          select: {
+            workspaceId: true,
           },
         },
       },
@@ -109,6 +113,7 @@ export const POST = withCron(async ({ rawBody }) => {
 
   // Mark the commissions as canceled
   await cancelCommissions({
+    workspaceId: program.workspaceId,
     programId,
     partnerId,
   });
@@ -129,13 +134,6 @@ export const POST = withCron(async ({ rawBody }) => {
     // Queue discount code deletions
     deleteDiscountCodes(links.map((link) => link.discountCode)),
   ]);
-
-  await reportCrossProgramBanToNetwork({
-    partnerId,
-    programId,
-    bannedReason: programEnrollment.bannedReason,
-    bannedAt: programEnrollment.bannedAt,
-  });
 
   // Send email
   if (partner.email) {

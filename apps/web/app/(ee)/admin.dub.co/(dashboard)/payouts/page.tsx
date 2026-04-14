@@ -16,7 +16,7 @@ import {
   useTable,
 } from "@dub/ui";
 import { Areas, TimeSeriesChart, XAxis, YAxis } from "@dub/ui/charts";
-import { CircleDotted, GridIcon, Paypal } from "@dub/ui/icons";
+import { CircleDotted, GridIcon, Paypal, Stablecoin } from "@dub/ui/icons";
 import {
   cn,
   currencyFormatter,
@@ -26,7 +26,7 @@ import {
 } from "@dub/utils";
 import NumberFlow from "@number-flow/react";
 import Link from "next/link";
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { Fragment, Suspense, useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 
 interface TimeseriesData {
@@ -54,6 +54,14 @@ type Tab = {
 };
 
 export default function PayoutsPage() {
+  return (
+    <Suspense>
+      <PayoutsPageClient />
+    </Suspense>
+  );
+}
+
+function PayoutsPageClient() {
   const { queryParams, getQueryString, searchParamsObj } = useRouterStuff();
   const { interval, start, end, status, programId } = searchParamsObj;
 
@@ -327,13 +335,22 @@ export default function PayoutsPage() {
           defaultInterval="mtd"
           className="w-full sm:min-w-[200px] md:w-fit"
         />
-        <Link href="/payouts/paypal">
-          <Button
-            variant="secondary"
-            text="Paypal payouts"
-            icon={<Paypal className="size-4" />}
-          />
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/payouts/paypal" className="w-full">
+            <Button
+              variant="secondary"
+              text="Paypal payouts"
+              icon={<Paypal className="size-4" />}
+            />
+          </Link>
+          <Link href="/payouts/stablecoin" className="w-full">
+            <Button
+              variant="secondary"
+              text="Stablecoin payouts"
+              icon={<Stablecoin className="size-4" />}
+            />
+          </Link>
+        </div>
       </div>
       {activeFilters.length > 0 && (
         <div>
